@@ -1,0 +1,14 @@
+#include <GLFW/glfw3.h>
+
+#include "gui.h"
+
+int main() {
+
+    GLFWApp window{};
+    window.create();
+    window.mainloop();
+    window.cleanup();
+
+    return 0;
+}
+
