@@ -27,11 +27,13 @@ public:
     float get_prompt_width() const;
     float get_input_width() const;
     void show_buffer();
+    void show_input_buffer();
     void key_pressed(char c, int type);
     
     // Input control
     void activate_input() { input_active = true; }
     void clear_input() { input_buffer.clear(); }
+    void command_test();
     
 public:
     std::string input_buffer;

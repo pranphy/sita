@@ -134,11 +134,9 @@ std::vector<ShapedGlyph> TextRenderer::shape_text(const std::string& text) {
     for (size_t i = 0; i < len; i++) {
         if (bytes[i] == 0xE0 && i + 2 < len) {
             // Check for Devanagari range: 0xE0 0xA4 0x80 to 0xE0 0xA5 0xBF
-            if (bytes[i + 1] == 0xA4 || bytes[i + 1] == 0xA5) {
-                if ((bytes[i + 1] == 0xA4 && bytes[i + 2] >= 0x80) or (bytes[i + 1] == 0xA5 && bytes[i + 2] <= 0xBF)) {
-                    has_devanagari = true;
-                    break;
-                }
+            if ((bytes[i + 1] == 0xA4 && bytes[i + 2] >= 0x80) or (bytes[i + 1] == 0xA5 && bytes[i + 2] <= 0xBF)) {
+                has_devanagari = true;
+                break;
             }
         }
     }
@@ -279,7 +277,7 @@ Coord TextRenderer::render_text_harfbuzz(const std::string& text, Coord cur_pos,
         cur_pos.x += shaped_glyph.x_advance * scale;
         if(cur_pos.x > window_width){
             cur_pos.x = 0;
-            cur_pos.y -= 2*h;
+            cur_pos.y -= h*0.5;
         }
         cur_pos.y += shaped_glyph.y_advance * scale;
     }
@@ -288,4 +286,6 @@ Coord TextRenderer::render_text_harfbuzz(const std::string& text, Coord cur_pos,
     glBindTexture(GL_TEXTURE_2D, 0);
     return cur_pos;
 }
+
+
 

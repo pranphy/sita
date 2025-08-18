@@ -1,12 +1,13 @@
 #include <print>
 #include <iostream>
 #include <GL/glew.h>
-#include "GLFW/glfw3.h"
+#include <GLFW/glfw3.h>
+
 
 #include "gui.h"
 //Terminal GLFWApp::terminal = Terminal(0,0);
 
-GLFWApp::GLFWApp():terminal(0,0)
+GLFWApp::GLFWApp():terminal(1920,1080)
 {
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -41,6 +42,20 @@ int GLFWApp::create(int width, int height, const char* title){
                 }
             }
     );
+
+    glfwSetFramebufferSizeCallback(window,
+            [](GLFWwindow* window, int width, int height) {
+                //std::println("Setting callback ");
+                auto app = static_cast<GLFWApp*>(glfwGetWindowUserPointer(window));
+                if(app) {
+                    std::println("Changed size to {}x{}", width, height);
+                    app->on_resize(width, height);
+                } else {
+                    //std::println("Failed to set callback");
+                }
+            }
+    );
+
     
     // Initialize GLEW
     if (glewInit() != GLEW_OK) {
@@ -60,28 +75,28 @@ int GLFWApp::create(int width, int height, const char* title){
 void GLFWApp::mainloop(){
     // Use IosevkaTerm as primary font and Laila-Regular as fallback for Devanagari
     //TextRenderer text_renderer;
+    int width, height;
+    glfwGetFramebufferSize(window, &width, &height);
+    glViewport(0, 0, width, height);
+    glClear(GL_COLOR_BUFFER_BIT);
     auto renderer = new TextRenderer();
     terminal.set_renderer(renderer);
+    terminal.set_window_size(width, height);
 
     std::println("Main looping ");
     
     while (!glfwWindowShouldClose(window)) {
-        //std::println("Here again");
-
-        int width, height;
-        glfwGetFramebufferSize(window, &width, &height);
-        glViewport(0, 0, width, height);
-        
-        glClear(GL_COLOR_BUFFER_BIT);
-
-        terminal.set_window_size(width, height);
-        terminal.handle_input(window);
-        terminal.show_buffer();
-
-        
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
+}
+
+void GLFWApp::on_resize(int width, int height){
+    glViewport(0, 0, width, height);
+    terminal.set_window_size(width,height);
+    //glClear(GL_COLOR_BUFFER_BIT);
+    terminal.show_buffer();
+    //glfwSwapBuffers(window);
 }
 
 void GLFWApp::on_key_press(int key, int action){

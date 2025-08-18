@@ -1,12 +1,14 @@
 project('trm', 'cpp',
   version : '0.1',
-  default_options : ['warning_level=3','cpp_std=c++23']
+  default_options : ['warning_level=3', 'cpp_std=c++23']
 )
 
 sources = [
   'main.cpp', 
   'src/gui.cpp',
+  'src/tty.cpp',
   'src/oglutil.cpp',
+  'src/utils.cpp',
   'src/terminal.cpp',
   'src/shader.cpp',
   'src/text_renderer.cpp',

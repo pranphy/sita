@@ -61,6 +61,9 @@ private:
     unsigned int get_glyph_id_for_char(char c, unsigned int font_index);
     const char* main_font;
     const char* fallback_font;
+    static uint32_t next_code_point(const std::string& s, size_t &i);
+    static bool is_devanagari(uint32_t cp);
+    std::vector<std::string> split_by_devanagari(const std::string& input);
 };
 
 #endif // TEXT_RENDERER_H
