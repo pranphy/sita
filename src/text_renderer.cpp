@@ -1,9 +1,12 @@
+#include <iostream>
 #include <format>
 #include <print>
-#include <iostream>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+
+#include "oglutil.h"
 #include "text_renderer.h"
 
 template <>
@@ -23,8 +26,12 @@ struct std::formatter<Character> : std::formatter<std::string> {
 std::string show_char(Character c){
     return std::format("Width: {}, height: {}, bearing_x: {}, bearing_y: {} advance: {}",c.width,c.height,c.bearing_x,c.bearing_y,c.advance);
 }
+TextRenderer::TextRenderer():
+   main_font ("/home/pranphy/.local/share/fonts/iosevka/IosevkaTermSlabNerdFont-Regular.ttf"),
+   fallback_font ("/home/pranphy/.local/share/fonts/devanagari/NotoSerif/NotoSerifDevanagari-Regular.ttf")
+{
 
-TextRenderer::TextRenderer(const char* primary_font_path, const char* fallback_font_path) {
+
     // Initialize shader - look for files in current directory (build directory)
     shader = new Shader("text.vert", "text.frag");
     
@@ -35,12 +42,9 @@ TextRenderer::TextRenderer(const char* primary_font_path, const char* fallback_f
     hb_buffer = hb_buffer_create();
     
     // Load primary font (index 0)
-    load_font(primary_font_path, 0);
+    load_font(main_font, 0);
     
-    // Load fallback font if provided (index 1)
-    if (fallback_font_path) {
-        load_font(fallback_font_path, 1);
-    }
+   load_font(fallback_font, 1);
 }
 
 TextRenderer::~TextRenderer() {
@@ -67,7 +71,7 @@ void TextRenderer::setup_buffers() {
     glBindVertexArray(0);
 }
 
-void TextRenderer::load_font(const char* font_path, int font_index) {
+void TextRenderer::load_font(const char* font_path, unsigned int font_index) {
     FT_Library ft;
     if (FT_Init_FreeType(&ft)) {
         std::println(std::cerr,"ERROR::FREETYPE: Could not init FreeType Library");
@@ -98,110 +102,19 @@ void TextRenderer::load_font(const char* font_path, int font_index) {
     ft_faces[font_index] = face;
     hb_fonts[font_index] = hb_font;
 
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1); // Disable byte-alignment restriction
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1); // Disable byte-alignment restriction this is !important
 
-    // Load basic ASCII characters for all fonts
-    for (unsigned char c = 0; c < 128; c++) {
-        // Load character glyph
-        if (FT_Load_Char(face, c, FT_LOAD_RENDER)) {
-            std::println(std::cerr,"ERROR::FREETYPE: Failed to load Glyph");
-            continue;
-        } else {
-            //std::println("Loaded character {}",c);
-        }
-
-        // Get the glyph ID for this character
-        unsigned int glyph_id = FT_Get_Char_Index(face, c);
-
-        // Generate texture
-        unsigned int texture;
-        glGenTextures(1, &texture);
-        glBindTexture(GL_TEXTURE_2D, texture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, face->glyph->bitmap.width, face->glyph->bitmap.rows, 0, GL_RED, GL_UNSIGNED_BYTE, face->glyph->bitmap.buffer);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-        // Store character information using glyph_id as key
-        Character character = {
-            texture,
-            face->glyph->bitmap.width,
-            face->glyph->bitmap.rows,
-            face->glyph->bitmap_left,
-            face->glyph->bitmap_top,
-            static_cast<unsigned int>(face->glyph->advance.x >> 6) // Convert to pixels
-        };
-        //std::println("Loaded {} with info {}",c,show_char(character));
-        font_glyphs[font_index][glyph_id] = character;
-        
-        // Also store in the old characters map for backward compatibility with render_text
-        if (font_index == 0) {
-            characters[c] = character;
-        }
-    }
 
     // Note: Don't destroy ft_face here as HarfBuzz needs it
     // FT_Done_Face(face);
     // FT_Done_FreeType(ft);
 }
 
-unsigned int TextRenderer::get_glyph_id_for_char(char c, int font_index) {
+unsigned int TextRenderer::get_glyph_id_for_char(char c, unsigned int font_index) {
     if (font_index < ft_faces.size() && ft_faces[font_index]) {
         return FT_Get_Char_Index(ft_faces[font_index], c);
     }
     return 0;
-}
-
-void TextRenderer::render_text(const std::string& text, float x, float y, float scale, const float* color, int window_width, int window_height) {
-    // Enable blending
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    
-    // Activate shader
-    shader->use();
-    shader->set_vec3("textColor", color[0], color[1], color[2]);
-    
-    // Create orthographic projection matrix using window dimensions
-    glm::mat4 projection = glm::ortho(0.0f, static_cast<float>(window_width), 0.0f, static_cast<float>(window_height));
-    shader->set_mat4("projection", glm::value_ptr(projection));
-    
-    glActiveTexture(GL_TEXTURE0);
-    glBindVertexArray(vao);
-
-    for (const char& c : text) {
-        Character ch = characters[c];
-
-        float xpos = x + ch.bearing_x * scale;
-        float ypos = y - (ch.height - ch.bearing_y) * scale;
-
-        float w = ch.width * scale;
-        float h = ch.height * scale;
-
-        // Update VBO for each character
-        float vertices[6][4] = {
-            { xpos,     ypos + h,   0.0f, 0.0f },            
-            { xpos,     ypos,       0.0f, 1.0f },
-            { xpos + w, ypos,       1.0f, 1.0f },
-
-            { xpos,     ypos + h,   0.0f, 0.0f },
-            { xpos + w, ypos,       1.0f, 1.0f },
-            { xpos + w, ypos + h,   1.0f, 0.0f }           
-        };
-        
-        // Render glyph texture over quad
-        glBindTexture(GL_TEXTURE_2D, ch.texture_id);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-
-        // Advance cursors for next glyph - ch.advance is already in pixels
-        x += ch.advance * scale;
-    }
-    
-    glBindVertexArray(0);
-    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 std::vector<ShapedGlyph> TextRenderer::shape_text(const std::string& text) {
@@ -222,10 +135,7 @@ std::vector<ShapedGlyph> TextRenderer::shape_text(const std::string& text) {
         if (bytes[i] == 0xE0 && i + 2 < len) {
             // Check for Devanagari range: 0xE0 0xA4 0x80 to 0xE0 0xA5 0xBF
             if (bytes[i + 1] == 0xA4 || bytes[i + 1] == 0xA5) {
-                if (bytes[i + 1] == 0xA4 && bytes[i + 2] >= 0x80) {
-                    has_devanagari = true;
-                    break;
-                } else if (bytes[i + 1] == 0xA5 && bytes[i + 2] <= 0xBF) {
+                if ((bytes[i + 1] == 0xA4 && bytes[i + 2] >= 0x80) or (bytes[i + 1] == 0xA5 && bytes[i + 2] <= 0xBF)) {
                     has_devanagari = true;
                     break;
                 }
@@ -234,18 +144,17 @@ std::vector<ShapedGlyph> TextRenderer::shape_text(const std::string& text) {
     }
     
     // Set appropriate script and language
-    hb_script_t script;
+    hb_script_t script; const char* script_name;
     if (has_devanagari) {
         script = HB_SCRIPT_DEVANAGARI;
-        hb_buffer_set_direction(hb_buffer, HB_DIRECTION_LTR);
-        hb_buffer_set_script(hb_buffer, script);
-        hb_buffer_set_language(hb_buffer, hb_language_from_string("hi", -1)); // Hindi language
+        script_name = "ne";
     } else {
         script = HB_SCRIPT_LATIN;
-        hb_buffer_set_direction(hb_buffer, HB_DIRECTION_LTR);
-        hb_buffer_set_script(hb_buffer, script);
-        hb_buffer_set_language(hb_buffer, hb_language_from_string("en", -1));
+        script_name = "en";
     }
+    hb_buffer_set_direction(hb_buffer, HB_DIRECTION_LTR);
+    hb_buffer_set_script(hb_buffer, script);
+    hb_buffer_set_language(hb_buffer, hb_language_from_string(script_name, -1));
     
     // Try primary font first (index 0)
     int font_index = 0;
@@ -276,7 +185,7 @@ std::vector<ShapedGlyph> TextRenderer::shape_text(const std::string& text) {
         hb_buffer_set_direction(hb_buffer, HB_DIRECTION_LTR);
         hb_buffer_set_script(hb_buffer, script);
         if (has_devanagari) {
-            hb_buffer_set_language(hb_buffer, hb_language_from_string("hi", -1));
+            hb_buffer_set_language(hb_buffer, hb_language_from_string("ne", -1));
         } else {
             hb_buffer_set_language(hb_buffer, hb_language_from_string("en", -1));
         }
@@ -311,7 +220,7 @@ std::vector<ShapedGlyph> TextRenderer::shape_text(const std::string& text) {
     return shaped_glyphs;
 }
 
-void TextRenderer::load_glyph(unsigned int glyph_id, int font_index) {
+void TextRenderer::load_glyph(unsigned int glyph_id, unsigned int font_index) {
     // Load the glyph using FreeType
     if (FT_Load_Glyph(ft_faces[font_index], glyph_id, FT_LOAD_RENDER)) {
         std::println(std::cerr,"ERROR::FREETYPE: Failed to load Glyph {}", glyph_id);
@@ -320,19 +229,13 @@ void TextRenderer::load_glyph(unsigned int glyph_id, int font_index) {
     
     // Generate texture
     unsigned int texture;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, ft_faces[font_index]->glyph->bitmap.width, ft_faces[font_index]->glyph->bitmap.rows, 0, GL_RED, GL_UNSIGNED_BYTE, ft_faces[font_index]->glyph->bitmap.buffer);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    oglutil::load_glyph_to_texture(ft_faces[font_index]->glyph, texture);
     
     // Store character information
     Character character = {
         texture,
-        ft_faces[font_index]->glyph->bitmap.width,
-        ft_faces[font_index]->glyph->bitmap.rows,
+        static_cast<int>(ft_faces[font_index]->glyph->bitmap.width),
+        static_cast<int>(ft_faces[font_index]->glyph->bitmap.rows),
         ft_faces[font_index]->glyph->bitmap_left,
         ft_faces[font_index]->glyph->bitmap_top,
         static_cast<unsigned int>(ft_faces[font_index]->glyph->advance.x >> 6)
@@ -341,7 +244,7 @@ void TextRenderer::load_glyph(unsigned int glyph_id, int font_index) {
     font_glyphs[font_index][glyph_id] = character;
 }
 
-void TextRenderer::render_text_harfbuzz(const std::string& text, float x, float y, float scale, const float* color, int window_width, int window_height) {
+Coord TextRenderer::render_text_harfbuzz(const std::string& text, Coord cur_pos, float scale, const float* color, int window_width, int window_height) {
     // Enable blending
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -360,43 +263,29 @@ void TextRenderer::render_text_harfbuzz(const std::string& text, float x, float 
     // Shape the text using HarfBuzz
     std::vector<ShapedGlyph> shaped_glyphs = shape_text(text);
     
-    float current_x = x;
-    float current_y = y;
-    
     for (const ShapedGlyph& shaped_glyph : shaped_glyphs) {
         Character* ch = shaped_glyph.character;
         
         // Calculate position with HarfBuzz offsets
-        float xpos = current_x + (ch->bearing_x + shaped_glyph.x_offset) * scale;
-        float ypos = current_y - (ch->height - ch->bearing_y - shaped_glyph.y_offset) * scale;
+        float xpos = cur_pos.x + (ch->bearing_x + shaped_glyph.x_offset) * scale;
+        float ypos = cur_pos.y - (ch->height - ch->bearing_y - shaped_glyph.y_offset) * scale;
         
         float w = ch->width * scale;
         float h = ch->height * scale;
         
-        // Update VBO for each character
-        float vertices[6][4] = {
-            { xpos,     ypos + h,   0.0f, 0.0f },            
-            { xpos,     ypos,       0.0f, 1.0f },
-            { xpos + w, ypos,       1.0f, 1.0f },
-            
-            { xpos,     ypos + h,   0.0f, 0.0f },
-            { xpos + w, ypos,       1.0f, 1.0f },
-            { xpos + w, ypos + h,   1.0f, 0.0f }           
-        };
-        
-        // Render glyph texture over quad
-        glBindTexture(GL_TEXTURE_2D, ch->texture_id);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
+        oglutil::render_texture_over_rectangle(ch->texture_id, vbo, xpos,ypos,w,h);
         
         // Advance cursor using HarfBuzz advances
-        current_x += shaped_glyph.x_advance * scale;
-        current_y += shaped_glyph.y_advance * scale;
+        cur_pos.x += shaped_glyph.x_advance * scale;
+        if(cur_pos.x > window_width){
+            cur_pos.x = 0;
+            cur_pos.y -= 2*h;
+        }
+        cur_pos.y += shaped_glyph.y_advance * scale;
     }
     
     glBindVertexArray(0);
     glBindTexture(GL_TEXTURE_2D, 0);
+    return cur_pos;
 }
 

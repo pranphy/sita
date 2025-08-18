@@ -1,7 +1,6 @@
 #ifndef TEXT_RENDERER_H
 #define TEXT_RENDERER_H
 
-#include <GL/glew.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include <hb.h>
@@ -10,6 +9,11 @@
 #include <string>
 #include <vector>
 #include "shader.h"
+
+struct Coord{
+    float x;
+    float y;
+};
 
 // Structure to hold character information
 struct Character {
@@ -36,11 +40,10 @@ std::string show_char(Character);
 
 class TextRenderer {
 public:
-    TextRenderer(const char* primary_font_path, const char* fallback_font_path = nullptr);
+    TextRenderer();
     ~TextRenderer();
-    void load_font(const char* font_path, int font_index);
-    void render_text(const std::string& text, float x, float y, float scale, const float* color, int window_width, int window_height);
-    void render_text_harfbuzz(const std::string& text, float x, float y, float scale, const float* color, int window_width, int window_height);
+    void load_font(const char* font_path, unsigned int font_index);
+    Coord render_text_harfbuzz(const std::string& text, Coord cur_pos, float scale, const float* color, int window_width, int window_height);
 
 private:
     std::map<char, Character> characters;
@@ -54,8 +57,10 @@ private:
     
     void setup_buffers();
     std::vector<ShapedGlyph> shape_text(const std::string& text);
-    void load_glyph(unsigned int glyph_id, int font_index);
-    unsigned int get_glyph_id_for_char(char c, int font_index);
+    void load_glyph(unsigned int glyph_id, unsigned int font_index);
+    unsigned int get_glyph_id_for_char(char c, unsigned int font_index);
+    const char* main_font;
+    const char* fallback_font;
 };
 
 #endif // TEXT_RENDERER_H

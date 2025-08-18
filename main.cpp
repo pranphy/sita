@@ -1,5 +1,3 @@
-#include <GLFW/glfw3.h>
-
 #include "gui.h"
 
 int main() {

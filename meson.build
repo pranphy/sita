@@ -6,8 +6,10 @@ project('trm', 'cpp',
 sources = [
   'main.cpp', 
   'src/gui.cpp',
-  'src/text_renderer.cpp',
+  'src/oglutil.cpp',
+  'src/terminal.cpp',
   'src/shader.cpp',
+  'src/text_renderer.cpp',
 ]
 
 # Include directories

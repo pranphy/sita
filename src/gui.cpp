@@ -1,15 +1,22 @@
 #include <print>
 #include <iostream>
 #include <GL/glew.h>
-#include "text_renderer.h"
+#include "GLFW/glfw3.h"
 
 #include "gui.h"
+//Terminal GLFWApp::terminal = Terminal(0,0);
 
-GLFWApp::GLFWApp(){
+GLFWApp::GLFWApp():terminal(0,0)
+{
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+
+}
+
+GLFWApp::~GLFWApp(){
+    glfwTerminate();
 }
 
 int GLFWApp::create(int width, int height, const char* title){
@@ -21,6 +28,19 @@ int GLFWApp::create(int width, int height, const char* title){
         return -1;
     }
     glfwMakeContextCurrent(window);
+    glfwSetWindowUserPointer(window,this);
+    glfwSetKeyCallback(window,
+            [](GLFWwindow* window, int key, int scancode, int action, int mods) {
+                //std::println("Setting callback ");
+                auto app = static_cast<GLFWApp*>(glfwGetWindowUserPointer(window));
+                if(app) {
+                    //std::println("Set callback");
+                    app->on_key_press(key, action);
+                } else {
+                    //std::println("Failed to set callback");
+                }
+            }
+    );
     
     // Initialize GLEW
     if (glewInit() != GLEW_OK) {
@@ -32,47 +52,56 @@ int GLFWApp::create(int width, int height, const char* title){
     glViewport(0, 0, width, height);
     
     // Set clear color
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClearColor(0.0f, 0.0f, 0.1f, 1.0f);
     
     return 0;
 }
 
 void GLFWApp::mainloop(){
     // Use IosevkaTerm as primary font and Laila-Regular as fallback for Devanagari
-    TextRenderer text_renderer(
-        "/home/pranphy/.local/share/fonts/iosevka/IosevkaTermSlabNerdFont-Regular.ttf",
-        "/home/pranphy/.local/share/fonts/devanagari/Laila-Regular.ttf"
-    );
+    //TextRenderer text_renderer;
+    auto renderer = new TextRenderer();
+    terminal.set_renderer(renderer);
+
+    std::println("Main looping ");
     
     while (!glfwWindowShouldClose(window)) {
-        // Get window dimensions
+        //std::println("Here again");
+
         int width, height;
         glfwGetFramebufferSize(window, &width, &height);
         glViewport(0, 0, width, height);
         
         glClear(GL_COLOR_BUFFER_BIT);
 
-        float color[] = {1.0f, 1.0f, 1.0f, 1.0f}; // White color
-        
-        // Use HarfBuzz for proper text shaping with font fallback
-        text_renderer.render_text_harfbuzz("Hello World! --> != <= := >=", 25.0f, height - 50.0f, 1.0f, color, width, height);
-        
-        // Test mixed text - Latin will use IosevkaTerm, Devanagari will use Laila
-        text_renderer.render_text_harfbuzz("माया श्रेष्ठ मृत्यु fi fil --> -> !=", 25.0f, height - 100.0f, 1.0f, color, width, height);
-        
-        // Test different text with proper spacing
-        text_renderer.render_text_harfbuzz("Text with proper kerning", 25.0f, height - 150.0f, 1.0f, color, width, height);
-        
-        // Test numbers and symbols
-        text_renderer.render_text_harfbuzz("Numbers: 1234567890", 25.0f, height - 200.0f, 1.0f, color, width, height);
+        terminal.set_window_size(width, height);
+        terminal.handle_input(window);
+        terminal.show_buffer();
 
+        
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
 }
 
+void GLFWApp::on_key_press(int key, int action){
+    // Check for backspace
+    if (key == GLFW_KEY_SPACE && action == GLFW_PRESS) {
+        terminal.key_pressed(' ', 32);
+    }else if(key == GLFW_KEY_BACKSPACE && action == GLFW_PRESS) {
+        terminal.key_pressed('\b', -1);
+    } else if(key == GLFW_KEY_ENTER && action == GLFW_PRESS) {
+        terminal.key_pressed('\n', 13);
+    } else if( key >= GLFW_KEY_A && key <= GLFW_KEY_Z && action == GLFW_PRESS) {
+        terminal.key_pressed((char)(key - GLFW_KEY_A + 'a'),0);
+    }
+    
+}
+
+
 void GLFWApp::cleanup(){
     // Cleanup
+    std::println("Done doing things ");
     glfwDestroyWindow(window);
     glfwTerminate();
 }
