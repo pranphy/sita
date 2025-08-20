@@ -4,6 +4,7 @@
 #include <GLFW/glfw3.h>
 #include <string>
 #include "text_renderer.h"
+#include "tty.h"
 
 // Terminal state management
 class Terminal {
@@ -34,6 +35,8 @@ public:
     void activate_input() { input_active = true; }
     void clear_input() { input_buffer.clear(); }
     void command_test();
+    std::string poll_output();
+    tty term;
     
 public:
     std::string input_buffer;

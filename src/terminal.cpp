@@ -3,11 +3,12 @@
 #include <unistd.h>
 #include <cstring>
 #include <fstream>
-#include "tty.h"
 #include "oglutil.h"
 #include "terminal.h"
 #include "utils.h"
 
+bool tty::running{true};
+termios tty::old_termios;
 
 std::vector<std::string> readlines(std::string filename,std::vector<std::string>& all_lines, unsigned int nol=0){
     std::string line; std::ifstream fileobj(filename);
@@ -110,7 +111,8 @@ float Terminal::get_input_width() const {
     return 0.0f; // Placeholder
 }
 void Terminal::command_test(){
-    auto result = execute_command("ip -c a");
+    //auto result = execute_command("ip -c a");
+    auto result = "hello world";
     std::println("Result: {}", result);
     float white[] = {1.0f, 1.0f, 1.0f, 1.0f};
     for(auto& line : utl::split_by_newline(result)){
@@ -134,7 +136,7 @@ void Terminal::show_buffer(){
         }
         text_renderer->render_text_harfbuzz(input_buffer, cursor_pos, 1.0f, color, win_width, win_height);
     }
-    command_test();
+    //command_test();
 }
 
 void Terminal::update_cursor_blink() {
@@ -168,27 +170,32 @@ void Terminal::key_pressed(char c, int type) {
     
     // Check for enter key
     if (type == 13) {
-        if (!enter_pressed) {
-            // Process command here
-            std::println("Command: {} " , input_buffer );
-            text_buffer.push_back(input_buffer);
-            input_buffer.clear();
-            input_active = false;
-            cursor_pos.y -= 20.0f;
-        }
-        enter_pressed = true;
-    } else {
-        enter_pressed = false;
+        // Process command here
+        //std::println("Command: {} " , input_buffer );
+        text_buffer.push_back(input_buffer);
+
+        input_buffer.clear();
+        input_active = false;
+        cursor_pos.y -= 20.0f;
+        term.write_to_pty('\n');
     }
     
     // Handle character input
-    if (type == 0) {
-            input_buffer += c;
-            //std::println("Input buffer so far {}", input_buffer);
-    } else if (type == 32) {
-        input_buffer += ' ';
-    }
+    if (type == 0 or type == 32) {
+        input_buffer += c;
+        term.write_to_pty(c);
+        //std::println("Input buffer so far {}", input_buffer);
+    } 
 
     show_buffer();
+}
+
+std::string Terminal::poll_output(){
+    auto result = term.handle_pty_output();
+    if(result.size() > 2){
+        std::println("Result: {}", result);
+        text_buffer.push_back(result);
+    }
+    return result;
 }
 
