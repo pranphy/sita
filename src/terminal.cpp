@@ -6,6 +6,7 @@
 #include "oglutil.h"
 #include "terminal.h"
 #include "utils.h"
+#include "terminal_parser.h"
 
 bool tty::running{true};
 termios tty::old_termios;
@@ -126,11 +127,15 @@ void Terminal::show_buffer(){
     glClear(GL_COLOR_BUFFER_BIT);
     cursor_pos = {25.0f, win_height - 50.0f};
     if(text_renderer){
-        float color[] = {0.2f, 1.0f, 1.0f, 1.0f}; // White color
-        unsigned start_no = std::max(text_buffer.size() - 20.0,0.0); // show only the last 20 lines
-        for(unsigned i = start_no; i < text_buffer.size(); i++){
+        // Show parsed buffer with proper colors and formatting
+        unsigned start_no = std::max(parsed_buffer.size() - 20.0, 0.0); // show only the last 20 lines
+        for(unsigned i = start_no; i < parsed_buffer.size(); i++){
+            const auto& parsed_line = parsed_buffer[i];
+            float color[4];
+            get_color_for_line_type(parsed_line.type, color);
+            
             // Split each line by newlines first, then handle each sub-line
-            std::vector<std::string> sub_lines = utl::split_by_newline(text_buffer[i]);
+            std::vector<std::string> sub_lines = utl::split_by_newline(parsed_line.content);
             for(const auto& sub_line : sub_lines) {
                 for(auto& word : utl::split_by_devanagari(sub_line)){
                     cursor_pos = text_renderer->render_text_harfbuzz(word, cursor_pos, 1.0f, color, win_width, win_height);
@@ -139,11 +144,13 @@ void Terminal::show_buffer(){
                 cursor_pos.x = 25.0f;
             }
         }
+        
         // Handle input buffer with newlines
         std::vector<std::string> input_lines = utl::split_by_newline(input_buffer);
+        float input_color[] = {0.2f, 1.0f, 1.0f, 1.0f}; // Cyan for input
         for(const auto& line : input_lines) {
             for(auto& word : utl::split_by_devanagari(line)){
-                cursor_pos = text_renderer->render_text_harfbuzz(word, cursor_pos, 1.0f, color, win_width, win_height);
+                cursor_pos = text_renderer->render_text_harfbuzz(word, cursor_pos, 1.0f, input_color, win_width, win_height);
             }
             cursor_pos.y -= 50.0f;
             cursor_pos.x = 25.0f;
@@ -208,7 +215,103 @@ std::string Terminal::poll_output(){
     if(result.size() > 2){
         std::println("Result: {}", result);
         text_buffer.push_back(result);
+        
+        // Parse the output and add to parsed buffer
+        auto parsed_lines = parser.parse_output(result);
+        for(const auto& parsed_line : parsed_lines) {
+            parsed_buffer.push_back(parsed_line);
+        }
     }
     return result;
+}
+
+void Terminal::get_color_for_line_type(LineType type, float* color) {
+    switch (type) {
+        case LineType::PROMPT:
+            color[0] = 0.0f;   // R
+            color[1] = 1.0f;   // G
+            color[2] = 0.0f;   // B
+            color[3] = 1.0f;   // A
+            break;
+        case LineType::COMMAND_OUTPUT:
+            color[0] = 1.0f;   // R
+            color[1] = 1.0f;   // G
+            color[2] = 1.0f;   // B
+            color[3] = 1.0f;   // A
+            break;
+        case LineType::ERROR_OUTPUT:
+            color[0] = 1.0f;   // R
+            color[1] = 0.0f;   // G
+            color[2] = 0.0f;   // B
+            color[3] = 1.0f;   // A
+            break;
+        case LineType::USER_INPUT:
+            color[0] = 0.2f;   // R
+            color[1] = 1.0f;   // G
+            color[2] = 1.0f;   // B
+            color[3] = 1.0f;   // A
+            break;
+        default:
+            color[0] = 0.8f;   // R
+            color[1] = 0.8f;   // G
+            color[2] = 0.8f;   // B
+            color[3] = 1.0f;   // A
+            break;
+    }
+}
+
+void Terminal::get_color_for_attributes(const TerminalAttributes& attrs, float* color) {
+    // Convert ANSI colors to RGB
+    switch (attrs.foreground) {
+        case AnsiColor::BLACK:
+            color[0] = 0.0f; color[1] = 0.0f; color[2] = 0.0f;
+            break;
+        case AnsiColor::RED:
+            color[0] = 1.0f; color[1] = 0.0f; color[2] = 0.0f;
+            break;
+        case AnsiColor::GREEN:
+            color[0] = 0.0f; color[1] = 1.0f; color[2] = 0.0f;
+            break;
+        case AnsiColor::YELLOW:
+            color[0] = 1.0f; color[1] = 1.0f; color[2] = 0.0f;
+            break;
+        case AnsiColor::BLUE:
+            color[0] = 0.0f; color[1] = 0.0f; color[2] = 1.0f;
+            break;
+        case AnsiColor::MAGENTA:
+            color[0] = 1.0f; color[1] = 0.0f; color[2] = 1.0f;
+            break;
+        case AnsiColor::CYAN:
+            color[0] = 0.0f; color[1] = 1.0f; color[2] = 1.0f;
+            break;
+        case AnsiColor::WHITE:
+            color[0] = 1.0f; color[1] = 1.0f; color[2] = 1.0f;
+            break;
+        case AnsiColor::BRIGHT_RED:
+            color[0] = 1.0f; color[1] = 0.5f; color[2] = 0.5f;
+            break;
+        case AnsiColor::BRIGHT_GREEN:
+            color[0] = 0.5f; color[1] = 1.0f; color[2] = 0.5f;
+            break;
+        case AnsiColor::BRIGHT_YELLOW:
+            color[0] = 1.0f; color[1] = 1.0f; color[2] = 0.5f;
+            break;
+        case AnsiColor::BRIGHT_BLUE:
+            color[0] = 0.5f; color[1] = 0.5f; color[2] = 1.0f;
+            break;
+        case AnsiColor::BRIGHT_MAGENTA:
+            color[0] = 1.0f; color[1] = 0.5f; color[2] = 1.0f;
+            break;
+        case AnsiColor::BRIGHT_CYAN:
+            color[0] = 0.5f; color[1] = 1.0f; color[2] = 1.0f;
+            break;
+        case AnsiColor::BRIGHT_WHITE:
+            color[0] = 1.0f; color[1] = 1.0f; color[2] = 1.0f;
+            break;
+        default:
+            color[0] = 1.0f; color[1] = 1.0f; color[2] = 1.0f;
+            break;
+    }
+    color[3] = 1.0f; // Alpha
 }
 

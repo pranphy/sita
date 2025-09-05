@@ -5,6 +5,7 @@
 #include <string>
 #include "text_renderer.h"
 #include "tty.h"
+#include "terminal_parser.h"
 
 // Terminal state management
 class Terminal {
@@ -57,7 +58,13 @@ public:
 
     TextRenderer* text_renderer;
     std::vector<std::string> text_buffer;
+    std::vector<ParsedLine> parsed_buffer;
     Coord cursor_pos;
+    TerminalParser parser;
+    
+    // Color management
+    void get_color_for_line_type(LineType type, float* color);
+    void get_color_for_attributes(const TerminalAttributes& attrs, float* color);
 };
 
 #endif // TERMINAL_H
