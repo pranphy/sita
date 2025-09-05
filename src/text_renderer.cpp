@@ -8,6 +8,7 @@
 
 #include "oglutil.h"
 #include "text_renderer.h"
+#include "utils.h"
 
 template <>
 struct std::formatter<Character> : std::formatter<std::string> {
@@ -117,6 +118,32 @@ unsigned int TextRenderer::get_glyph_id_for_char(char c, unsigned int font_index
     return 0;
 }
 
+void TextRenderer::load_glyph(unsigned int glyph_id, unsigned int font_index) {
+    // Load the glyph using FreeType
+    if (FT_Load_Glyph(ft_faces[font_index], glyph_id, FT_LOAD_RENDER)) {
+        std::println(std::cerr,"ERROR::FREETYPE: Failed to load Glyph {}", glyph_id);
+        return;
+    }
+    
+    // Generate texture
+    unsigned int texture;
+    oglutil::load_glyph_to_texture(ft_faces[font_index]->glyph, texture);
+    
+    // Store character information
+    Character character = {
+        texture,
+        static_cast<int>(ft_faces[font_index]->glyph->bitmap.width),
+        static_cast<int>(ft_faces[font_index]->glyph->bitmap.rows),
+        ft_faces[font_index]->glyph->bitmap_left,
+        ft_faces[font_index]->glyph->bitmap_top,
+        static_cast<unsigned int>(ft_faces[font_index]->glyph->advance.x >> 6)
+
+    };
+    
+    font_glyphs[font_index][glyph_id] = character;
+}
+
+
 std::vector<ShapedGlyph> TextRenderer::shape_text(const std::string& text) {
     std::vector<ShapedGlyph> shaped_glyphs;
     
@@ -218,30 +245,6 @@ std::vector<ShapedGlyph> TextRenderer::shape_text(const std::string& text) {
     return shaped_glyphs;
 }
 
-void TextRenderer::load_glyph(unsigned int glyph_id, unsigned int font_index) {
-    // Load the glyph using FreeType
-    if (FT_Load_Glyph(ft_faces[font_index], glyph_id, FT_LOAD_RENDER)) {
-        std::println(std::cerr,"ERROR::FREETYPE: Failed to load Glyph {}", glyph_id);
-        return;
-    }
-    
-    // Generate texture
-    unsigned int texture;
-    oglutil::load_glyph_to_texture(ft_faces[font_index]->glyph, texture);
-    
-    // Store character information
-    Character character = {
-        texture,
-        static_cast<int>(ft_faces[font_index]->glyph->bitmap.width),
-        static_cast<int>(ft_faces[font_index]->glyph->bitmap.rows),
-        ft_faces[font_index]->glyph->bitmap_left,
-        ft_faces[font_index]->glyph->bitmap_top,
-        static_cast<unsigned int>(ft_faces[font_index]->glyph->advance.x >> 6)
-    };
-    
-    font_glyphs[font_index][glyph_id] = character;
-}
-
 Coord TextRenderer::render_text_harfbuzz(const std::string& text, Coord cur_pos, float scale, const float* color, int window_width, int window_height) {
     // Enable blending
     glEnable(GL_BLEND);
@@ -277,7 +280,7 @@ Coord TextRenderer::render_text_harfbuzz(const std::string& text, Coord cur_pos,
         cur_pos.x += shaped_glyph.x_advance * scale;
         if(cur_pos.x > window_width){
             cur_pos.x = 0;
-            cur_pos.y -= h*0.5;
+            cur_pos.y -= 50;
         }
         cur_pos.y += shaped_glyph.y_advance * scale;
     }

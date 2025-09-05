@@ -127,14 +127,27 @@ void Terminal::show_buffer(){
     cursor_pos = {25.0f, win_height - 50.0f};
     if(text_renderer){
         float color[] = {0.2f, 1.0f, 1.0f, 1.0f}; // White color
-        for(auto& text : text_buffer){
-            for(auto& word : utl::split_by_devanagari(text)){
+        unsigned start_no = std::max(text_buffer.size() - 20.0,0.0); // show only the last 20 lines
+        for(unsigned i = start_no; i < text_buffer.size(); i++){
+            // Split each line by newlines first, then handle each sub-line
+            std::vector<std::string> sub_lines = utl::split_by_newline(text_buffer[i]);
+            for(const auto& sub_line : sub_lines) {
+                for(auto& word : utl::split_by_devanagari(sub_line)){
+                    cursor_pos = text_renderer->render_text_harfbuzz(word, cursor_pos, 1.0f, color, win_width, win_height);
+                }
+                cursor_pos.y -= 50.0f;
+                cursor_pos.x = 25.0f;
+            }
+        }
+        // Handle input buffer with newlines
+        std::vector<std::string> input_lines = utl::split_by_newline(input_buffer);
+        for(const auto& line : input_lines) {
+            for(auto& word : utl::split_by_devanagari(line)){
                 cursor_pos = text_renderer->render_text_harfbuzz(word, cursor_pos, 1.0f, color, win_width, win_height);
             }
             cursor_pos.y -= 50.0f;
             cursor_pos.x = 25.0f;
         }
-        text_renderer->render_text_harfbuzz(input_buffer, cursor_pos, 1.0f, color, win_width, win_height);
     }
     //command_test();
 }

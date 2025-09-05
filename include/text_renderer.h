@@ -55,7 +55,10 @@ private:
     std::vector<hb_font_t*> hb_fonts;
     hb_buffer_t* hb_buffer;
     
-    void setup_buffers();
+  void setup_buffers();
+    void set_hb_buffer_properties(hb_buffer_t* buf, const std::string& text);
+    std::vector<ShapedGlyph> get_shaped_glyphs_from_buffer(hb_buffer_t* buf, int font_index);
+    bool try_shape_with_font(hb_buffer_t* buf, hb_font_t* font, const std::string& text);
     std::vector<ShapedGlyph> shape_text(const std::string& text);
     void load_glyph(unsigned int glyph_id, unsigned int font_index);
     unsigned int get_glyph_id_for_char(char c, unsigned int font_index);
