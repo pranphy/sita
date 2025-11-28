@@ -1,25 +1,24 @@
 #ifndef GUI_H
 #define GUI_H
 
-#include <GLFW/glfw3.h>
 #include "terminal.h"
+#include <GLFW/glfw3.h>
 
-class GLFWApp{
-    public:
+class GLFWApp {
+public:
+  GLFWApp();
+  ~GLFWApp();
+  static void init();
+  int create(int width = 1920, int height = 1080, const char *title = "title");
+  void mainloop();
+  void cleanup();
+  void on_key_press(int key, int action, int mods);
+  void on_char(unsigned int codepoint);
+  void on_resize(int width, int height);
 
-        GLFWApp();
-        ~GLFWApp();
-        static void init();
-        int create(int width=1920, int height=1080, const char* title="title");
-        void mainloop();
-        void cleanup();
-        void on_key_press(int key, int action, int mods);
-        void on_resize(int width, int height);
-
-    private:
-        GLFWwindow* window;
-        Terminal terminal;
+private:
+  GLFWwindow *window;
+  Terminal terminal;
 };
-
 
 #endif

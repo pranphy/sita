@@ -193,34 +193,17 @@ void Terminal::show_input_buffer() {
   }
 }
 
-void Terminal::key_pressed(char c, int type) {
-  // Check for backspace
-  if (type == -1) {
-    if (!input_buffer.empty()) {
-      input_buffer.pop_back();
-    }
-  }
-
-  // Check for enter key
-  if (type == 13) {
-    // Process command here
-    // std::println("Command: {} " , input_buffer );
-    text_buffer.push_back(input_buffer);
-
-    input_buffer.clear();
-    input_active = false;
-    cursor_pos.y -= 20.0f;
-    term.write_to_pty('\n');
-  }
-
-  // Handle character input
-  if (type == 0 or type == 32) {
-    input_buffer += c;
+void Terminal::send_input(const std::string &input) {
+  for (char c : input) {
     term.write_to_pty(c);
-    // std::println("Input buffer so far {}", input_buffer);
   }
+  // No local buffering, rely on PTY echo
+}
 
-  show_buffer();
+void Terminal::key_pressed(char c, int type) {
+  // Deprecated, but kept for compatibility if needed
+  std::string s(1, c);
+  send_input(s);
 }
 
 std::string Terminal::poll_output() {

@@ -29,13 +29,16 @@ int GLFWApp::create(int width, int height, const char *title) {
   glfwSetWindowUserPointer(window, this);
   glfwSetKeyCallback(window, [](GLFWwindow *window, int key, int scancode,
                                 int action, int mods) {
-    // std::println("Setting callback ");
     auto app = static_cast<GLFWApp *>(glfwGetWindowUserPointer(window));
     if (app) {
-      // std::println("Set callback");
       app->on_key_press(key, action, mods);
-    } else {
-      // std::println("Failed to set callback");
+    }
+  });
+
+  glfwSetCharCallback(window, [](GLFWwindow *window, unsigned int codepoint) {
+    auto app = static_cast<GLFWApp *>(glfwGetWindowUserPointer(window));
+    if (app) {
+      app->on_char(codepoint);
     }
   });
 
@@ -102,22 +105,123 @@ void GLFWApp::on_resize(int width, int height) {
   // glfwSwapBuffers(window);
 }
 
+void GLFWApp::on_char(unsigned int codepoint) {
+  std::string encoded;
+  if (codepoint <= 0x7F) {
+    encoded += (char)codepoint;
+  } else if (codepoint <= 0x7FF) {
+    encoded += (char)(0xC0 | (codepoint >> 6));
+    encoded += (char)(0x80 | (codepoint & 0x3F));
+  } else if (codepoint <= 0xFFFF) {
+    encoded += (char)(0xE0 | (codepoint >> 12));
+    encoded += (char)(0x80 | ((codepoint >> 6) & 0x3F));
+    encoded += (char)(0x80 | (codepoint & 0x3F));
+  } else if (codepoint <= 0x10FFFF) {
+    encoded += (char)(0xF0 | (codepoint >> 18));
+    encoded += (char)(0x80 | ((codepoint >> 12) & 0x3F));
+    encoded += (char)(0x80 | ((codepoint >> 6) & 0x3F));
+    encoded += (char)(0x80 | (codepoint & 0x3F));
+  }
+  terminal.send_input(encoded);
+}
+
 void GLFWApp::on_key_press(int key, int action, int mods) {
-  // Check for Ctrl+D to exit
-  if (key == GLFW_KEY_D && action == GLFW_PRESS && (mods & GLFW_MOD_CONTROL)) {
-    glfwSetWindowShouldClose(window, true);
+  if (action != GLFW_PRESS && action != GLFW_REPEAT)
     return;
+
+  // Ctrl+Key handling
+  if (mods & GLFW_MOD_CONTROL) {
+    if (key >= GLFW_KEY_A && key <= GLFW_KEY_Z) {
+      char c = key - GLFW_KEY_A + 1;
+      terminal.send_input(std::string(1, c));
+      return;
+    }
+    if (key == GLFW_KEY_LEFT_BRACKET) {
+      terminal.send_input("\x1b");
+      return;
+    }
   }
 
-  // Check for backspace
-  if (key == GLFW_KEY_SPACE && action == GLFW_PRESS) {
-    terminal.key_pressed(' ', 32);
-  } else if (key == GLFW_KEY_BACKSPACE && action == GLFW_PRESS) {
-    terminal.key_pressed('\b', -1);
-  } else if (key == GLFW_KEY_ENTER && action == GLFW_PRESS) {
-    terminal.key_pressed('\n', 13);
-  } else if (key >= GLFW_KEY_A && key <= GLFW_KEY_Z && action == GLFW_PRESS) {
-    terminal.key_pressed((char)(key - GLFW_KEY_A + 'a'), 0);
+  // Special keys
+  switch (key) {
+  case GLFW_KEY_ENTER:
+    terminal.send_input("\r");
+    break;
+  case GLFW_KEY_BACKSPACE:
+    terminal.send_input("\x7f");
+    break;
+  case GLFW_KEY_TAB:
+    terminal.send_input("\t");
+    break;
+  case GLFW_KEY_ESCAPE:
+    terminal.send_input("\x1b");
+    break;
+  case GLFW_KEY_UP:
+    terminal.send_input("\x1b[A");
+    break;
+  case GLFW_KEY_DOWN:
+    terminal.send_input("\x1b[B");
+    break;
+  case GLFW_KEY_RIGHT:
+    terminal.send_input("\x1b[C");
+    break;
+  case GLFW_KEY_LEFT:
+    terminal.send_input("\x1b[D");
+    break;
+  case GLFW_KEY_HOME:
+    terminal.send_input("\x1b[H");
+    break;
+  case GLFW_KEY_END:
+    terminal.send_input("\x1b[F");
+    break;
+  case GLFW_KEY_PAGE_UP:
+    terminal.send_input("\x1b[5~");
+    break;
+  case GLFW_KEY_PAGE_DOWN:
+    terminal.send_input("\x1b[6~");
+    break;
+  case GLFW_KEY_INSERT:
+    terminal.send_input("\x1b[2~");
+    break;
+  case GLFW_KEY_DELETE:
+    terminal.send_input("\x1b[3~");
+    break;
+  case GLFW_KEY_F1:
+    terminal.send_input("\x1bOP");
+    break;
+  case GLFW_KEY_F2:
+    terminal.send_input("\x1bOQ");
+    break;
+  case GLFW_KEY_F3:
+    terminal.send_input("\x1bOR");
+    break;
+  case GLFW_KEY_F4:
+    terminal.send_input("\x1bOS");
+    break;
+  case GLFW_KEY_F5:
+    terminal.send_input("\x1b[15~");
+    break;
+  case GLFW_KEY_F6:
+    terminal.send_input("\x1b[17~");
+    break;
+  case GLFW_KEY_F7:
+    terminal.send_input("\x1b[18~");
+    break;
+  case GLFW_KEY_F8:
+    terminal.send_input("\x1b[19~");
+    break;
+  case GLFW_KEY_F9:
+    terminal.send_input("\x1b[20~");
+    break;
+  case GLFW_KEY_F10:
+    terminal.send_input("\x1b[21~");
+    break;
+  case GLFW_KEY_F11:
+    terminal.send_input("\x1b[23~");
+    break;
+  case GLFW_KEY_F12:
+    terminal.send_input("\x1b[24~");
+    break;
   }
 }
 

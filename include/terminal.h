@@ -32,6 +32,7 @@ public:
   void show_buffer();
   void show_input_buffer();
   void key_pressed(char c, int type);
+  void send_input(const std::string &input);
 
   // Input control
   void activate_input() { input_active = true; }
