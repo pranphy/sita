@@ -13,13 +13,6 @@
 #include <string>
 
 
-// Enum for the state machine
-enum TerminalState {
-    STATE_NORMAL,
-    STATE_ESCAPE,
-    STATE_CSI // Control Sequence Introducer
-};
-
 // Represents the grid of characters on the screen
 struct vec2{
     int x = 0;
@@ -38,8 +31,6 @@ struct tty{
     const int MAX_COLS = 80;
     int pty_master_fd;
     pid_t shell_pid;
-    TerminalState current_state = STATE_NORMAL;
-    std::string escape_sequence_buffer;
     void init();
     unsigned line_no;
 
@@ -61,8 +52,6 @@ struct tty{
     void add_to_screen_buffer(std::string);
     void close_master();
     void main_loop();
-
-    std::vector<char>intrepret_bytes(char* buffer, int len);
 
 };
 

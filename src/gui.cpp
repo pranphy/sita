@@ -1,8 +1,8 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
-#include <thread>
 #include <iostream>
 #include <print>
+#include <thread>
 
 #include "gui.h"
 // Terminal GLFWApp::terminal = Terminal(0,0);
@@ -33,7 +33,7 @@ int GLFWApp::create(int width, int height, const char *title) {
     auto app = static_cast<GLFWApp *>(glfwGetWindowUserPointer(window));
     if (app) {
       // std::println("Set callback");
-      app->on_key_press(key, action);
+      app->on_key_press(key, action, mods);
     } else {
       // std::println("Failed to set callback");
     }
@@ -84,6 +84,10 @@ void GLFWApp::mainloop() {
     // lets just slow things downa a bit, shall we?
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     auto output = terminal.poll_output();
+    if (output.find('\x04') != std::string::npos) {
+      glfwSetWindowShouldClose(window, true);
+    }
+    terminal.show_buffer();
 
     glfwSwapBuffers(window);
     glfwPollEvents();
@@ -98,7 +102,13 @@ void GLFWApp::on_resize(int width, int height) {
   // glfwSwapBuffers(window);
 }
 
-void GLFWApp::on_key_press(int key, int action) {
+void GLFWApp::on_key_press(int key, int action, int mods) {
+  // Check for Ctrl+D to exit
+  if (key == GLFW_KEY_D && action == GLFW_PRESS && (mods & GLFW_MOD_CONTROL)) {
+    glfwSetWindowShouldClose(window, true);
+    return;
+  }
+
   // Check for backspace
   if (key == GLFW_KEY_SPACE && action == GLFW_PRESS) {
     terminal.key_pressed(' ', 32);

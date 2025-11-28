@@ -48,13 +48,16 @@ struct TerminalAttributes {
     bool strikethrough = false;
 };
 
+// Styled text segment
+struct StyledSegment {
+    std::string content;
+    TerminalAttributes attributes;
+};
+
 // Parsed terminal line
 struct ParsedLine {
-    std::string content;
+    std::vector<StyledSegment> segments;
     LineType type;
-    TerminalAttributes attributes;
-    bool is_escape_sequence = false;
-    std::string escape_sequence;
 };
 
 class TerminalParser {

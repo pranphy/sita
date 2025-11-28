@@ -10,6 +10,7 @@ sources = [
   'src/oglutil.cpp',
   'src/utils.cpp',
   'src/terminal.cpp',
+  'src/terminal_parser.cpp',
   'src/shader.cpp',
   'src/text_renderer.cpp',
 ]
