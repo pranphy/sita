@@ -22,6 +22,13 @@ public:
   void render_line(const ParsedLine &line, float &y_pos);
   void set_window_size(float width, float height);
 
+  // Scrollback
+  void scroll_up();
+  void scroll_down();
+  void scroll_page_up();
+  void scroll_page_down();
+  void scroll_to_bottom();
+
   // Getters
   void show_buffer();
   void key_pressed(char c, int type);
@@ -37,6 +44,7 @@ public:
   // Input handling state
   double last_cursor_time;
   bool cursor_visible;
+  int scroll_offset = 0;
 
   // Helper functions
   void update_cursor_blink();

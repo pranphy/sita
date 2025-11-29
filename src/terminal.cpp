@@ -45,6 +45,36 @@ void Terminal::set_window_size(float width, float height) {
   // std::println("Changed sized of terminal to {}x{}", width, height);
 }
 
+void Terminal::scroll_up() {
+  scroll_offset++;
+  // Clamp to max history? For now just ensure we don't go past size
+  // We can scroll back as much as we have lines
+  // But we need to know total lines to clamp properly, which is dynamic.
+  // Let's clamp in show_buffer or just let it grow and clamp there.
+  // Actually better to clamp here if possible, but total lines changes.
+  // Let's just increment and handle "too far" in rendering.
+}
+
+void Terminal::scroll_down() {
+  if (scroll_offset > 0) {
+    scroll_offset--;
+  }
+}
+
+void Terminal::scroll_page_up() {
+  int lines_per_page = (win_height / 50.0f) - 1;
+  scroll_offset += lines_per_page;
+}
+
+void Terminal::scroll_page_down() {
+  int lines_per_page = (win_height / 50.0f) - 1;
+  scroll_offset -= lines_per_page;
+  if (scroll_offset < 0)
+    scroll_offset = 0;
+}
+
+void Terminal::scroll_to_bottom() { scroll_offset = 0; }
+
 Terminal::~Terminal() {
   // Cleanup if needed
   cursor_pos = {0.0f, 0.0f};
@@ -53,7 +83,6 @@ Terminal::~Terminal() {
 void Terminal::render_line(const ParsedLine &line, float &y_pos) {
   float current_x = 25.0f;
   float margin = 25.0f;
-  float max_width = win_width - (margin * 2);
 
   // Render each segment of the line with its own attributes
   for (const auto &segment : line.segments) {
@@ -119,25 +148,72 @@ void Terminal::show_buffer() {
     size_t total_lines = parsed_buffer.size() + active_parsed.size();
     size_t max_lines = (win_height / 50.0f) - 1; // Approximate
 
+    // Clamp scroll_offset
+    if (scroll_offset > (int)total_lines - (int)max_lines) {
+      scroll_offset = (int)total_lines - (int)max_lines;
+    }
+    if (scroll_offset < 0)
+      scroll_offset = 0;
+
     size_t start_index = 0;
     if (total_lines > max_lines) {
-      start_index = total_lines - max_lines;
+      start_index = total_lines - max_lines - scroll_offset;
     }
 
     // Render parsed_buffer lines
     for (size_t i = 0; i < parsed_buffer.size(); ++i) {
-      if (i >= start_index) {
+      if (i >= start_index && i < start_index + max_lines) {
         render_line(parsed_buffer[i], start_y);
       }
     }
 
     // Render active_raw_line lines
     for (size_t i = 0; i < active_parsed.size(); ++i) {
-      if (parsed_buffer.size() + i >= start_index) {
+      if (parsed_buffer.size() + i >= start_index &&
+          parsed_buffer.size() + i < start_index + max_lines) {
         render_line(active_parsed[i], start_y);
       }
     }
   }
+
+  // Render cursor
+  if (cursor_visible) {
+    render_cursor(cursor_pos.x, cursor_pos.y, 1.0f, 10,
+                  20); // Default cursor size
+  }
+}
+
+void Terminal::render_cursor(float x, float y, float scale, int width,
+                             int height) {
+  glUseProgram(0); // Unbind any active shader to use fixed-function pipeline
+  glDisable(GL_TEXTURE_2D);
+  glColor4f(1.0f, 1.0f, 1.0f, 1.0f); // White cursor
+
+  // Adjust cursor size if not provided
+  float w = (width > 0 ? width : 10.0f) * scale;
+  float h = (height > 0 ? height : 20.0f) * scale;
+
+  glMatrixMode(GL_PROJECTION);
+  glPushMatrix();
+  glLoadIdentity();
+  glOrtho(0.0f, win_width, 0.0f, win_height, -1.0f, 1.0f);
+  glMatrixMode(GL_MODELVIEW);
+  glPushMatrix();
+  glLoadIdentity();
+
+  glBegin(GL_QUADS);
+  glVertex2f(x, y);
+  glVertex2f(x + w, y);
+  glVertex2f(x + w, y + h);
+  glVertex2f(x, y + h);
+  glEnd();
+
+  glPopMatrix();
+  glMatrixMode(GL_PROJECTION);
+  glPopMatrix();
+  glMatrixMode(GL_MODELVIEW);
+
+  glEnable(GL_TEXTURE_2D);
 }
 
 void Terminal::update_cursor_blink() {
@@ -159,7 +235,7 @@ void Terminal::send_input(const std::string &input) {
   // No local buffering, rely on PTY echo
 }
 
-void Terminal::key_pressed(char c, int type) {
+void Terminal::key_pressed(char c, int /*type*/) {
   // Deprecated, but kept for compatibility if needed
   std::string s(1, c);
   send_input(s);

@@ -90,6 +90,7 @@ void GLFWApp::mainloop() {
     if (output.find('\x04') != std::string::npos) {
       glfwSetWindowShouldClose(window, true);
     }
+    terminal.update_cursor_blink();
     terminal.show_buffer();
 
     glfwSwapBuffers(window);
@@ -138,6 +139,26 @@ void GLFWApp::on_key_press(int key, int action, int mods) {
     }
     if (key == GLFW_KEY_LEFT_BRACKET) {
       terminal.send_input("\x1b");
+      return;
+    }
+  }
+
+  // Shift+Key handling (Scrolling)
+  if (mods & GLFW_MOD_SHIFT) {
+    if (key == GLFW_KEY_UP) {
+      terminal.scroll_up();
+      return;
+    }
+    if (key == GLFW_KEY_DOWN) {
+      terminal.scroll_down();
+      return;
+    }
+    if (key == GLFW_KEY_PAGE_UP) {
+      terminal.scroll_page_up();
+      return;
+    }
+    if (key == GLFW_KEY_PAGE_DOWN) {
+      terminal.scroll_page_down();
       return;
     }
   }
