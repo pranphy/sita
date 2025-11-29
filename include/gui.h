@@ -15,6 +15,7 @@ public:
   void on_key_press(int key, int action, int mods);
   void on_char(unsigned int codepoint);
   void on_resize(int width, int height);
+  void on_scroll(double xoffset, double yoffset);
 
 private:
   GLFWwindow *window;

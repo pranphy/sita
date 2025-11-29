@@ -54,6 +54,14 @@ int GLFWApp::create(int width, int height, const char *title) {
         }
       });
 
+  glfwSetScrollCallback(
+      window, [](GLFWwindow *window, double xoffset, double yoffset) {
+        auto app = static_cast<GLFWApp *>(glfwGetWindowUserPointer(window));
+        if (app) {
+          app->on_scroll(xoffset, yoffset);
+        }
+      });
+
   // Initialize GLEW
   if (glewInit() != GLEW_OK) {
     std::println(std::cerr, "ERROR::GLEW: Failed to initialize GLEW");
@@ -95,7 +103,22 @@ void GLFWApp::mainloop() {
 
     glfwSwapBuffers(window);
     glfwPollEvents();
+    terminal.show_buffer();
+    // glfwSwapBuffers(window);
   }
+}
+
+void GLFWApp::on_scroll(double /*xoffset*/, double yoffset) {
+  if (yoffset > 0) {
+    terminal.scroll_up();
+    terminal.scroll_up(); // Scroll faster?
+    terminal.scroll_up();
+  } else if (yoffset < 0) {
+    terminal.scroll_down();
+    terminal.scroll_down();
+    terminal.scroll_down();
+  }
+  terminal.show_buffer();
 }
 
 void GLFWApp::on_resize(int width, int height) {
