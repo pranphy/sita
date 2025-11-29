@@ -3,3 +3,4 @@ compile
 .cache/
 build_*.txt
 debug*.log
+log/
