@@ -275,3 +275,12 @@ Coord TextRenderer::render_text_harfbuzz(const std::string &text, Coord cur_pos,
   glBindTexture(GL_TEXTURE_2D, 0);
   return cur_pos;
 }
+
+float TextRenderer::measure_text_width(const std::string &text, float scale) {
+  std::vector<ShapedGlyph> shaped_glyphs = shape_text(text);
+  float width = 0.0f;
+  for (const ShapedGlyph &shaped_glyph : shaped_glyphs) {
+    width += shaped_glyph.x_advance * scale;
+  }
+  return width;
+}
