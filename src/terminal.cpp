@@ -276,6 +276,9 @@ std::string Terminal::poll_output() {
 
       // Update active_raw_line to be the remainder
       active_raw_line = remainder;
+
+      // Auto-scroll to bottom to keep prompt visible
+      scroll_offset = 0;
     }
   }
   return result;
