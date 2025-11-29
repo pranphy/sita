@@ -35,6 +35,7 @@ TerminalParser::parse_output(const std::string &output) {
   for (const auto &line : lines) {
     std::vector<Cell> cells;
     int cursor_x = 0;
+    bool line_clears_screen = false;
 
     // Process the line character by character (or chunk by chunk for escapes)
     size_t current_pos = 0;
@@ -69,6 +70,20 @@ TerminalParser::parse_output(const std::string &output) {
             cursor_x = 0;
           }
         } else {
+          // Check for Erase in Display (ED) - \x1b[J or \x1b[nJ
+          std::regex ed_regex(R"(\x1b\[(\d*)J)");
+          if (std::regex_search(escape_seq, match, ed_regex)) {
+            int mode = 0;
+            if (match[1].length() > 0) {
+              mode = std::stoi(match[1].str());
+            }
+            if (mode == 2 || mode == 3) {
+              // Clear screen/scrollback
+              cells.clear();
+              cursor_x = 0;
+              line_clears_screen = true;
+            }
+          }
           // Other escape sequences (colors, cursor move, etc.)
           current_attributes = parse_escape_sequence(escape_seq);
         }
@@ -120,6 +135,7 @@ TerminalParser::parse_output(const std::string &output) {
     // Convert cells to segments
     ParsedLine parsed_line;
     parsed_line.type = LineType::UNKNOWN;
+    parsed_line.clear_screen = line_clears_screen;
 
     if (cells.empty()) {
       // Empty line

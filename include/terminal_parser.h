@@ -58,6 +58,7 @@ struct StyledSegment {
 struct ParsedLine {
   std::vector<StyledSegment> segments;
   LineType type;
+  bool clear_screen = false;
 };
 
 struct Cell {

@@ -143,6 +143,12 @@ void Terminal::show_buffer() {
     std::vector<ParsedLine> active_parsed;
     if (!active_raw_line.empty()) {
       active_parsed = parser.parse_output(active_raw_line);
+      for (const auto &line : active_parsed) {
+        if (line.clear_screen) {
+          parsed_buffer.clear();
+          scroll_offset = 0;
+        }
+      }
     }
 
     size_t total_lines = parsed_buffer.size() + active_parsed.size();
@@ -260,8 +266,13 @@ std::string Terminal::poll_output() {
       auto complete_parsed = parser.parse_output(complete_chunk);
 
       // Append to parsed_buffer
-      parsed_buffer.insert(parsed_buffer.end(), complete_parsed.begin(),
-                           complete_parsed.end());
+      for (const auto &line : complete_parsed) {
+        if (line.clear_screen) {
+          parsed_buffer.clear();
+          scroll_offset = 0;
+        }
+        parsed_buffer.push_back(line);
+      }
 
       // Update active_raw_line to be the remainder
       active_raw_line = remainder;
