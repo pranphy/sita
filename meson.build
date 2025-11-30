@@ -13,6 +13,7 @@ sources = [
   'src/terminal_parser.cpp',
   'src/shader.cpp',
   'src/text_renderer.cpp',
+  'src/terminal_view.cpp',
 ]
 
 # Include directories

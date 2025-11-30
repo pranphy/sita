@@ -2,6 +2,7 @@
 #define GUI_H
 
 #include "terminal.h"
+#include "terminal_view.h"
 #include <GLFW/glfw3.h>
 
 class GLFWApp {
@@ -20,6 +21,7 @@ public:
 private:
   GLFWwindow *window;
   Terminal terminal;
+  TerminalView view;
 };
 
 #endif

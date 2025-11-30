@@ -7,7 +7,7 @@
 #include "gui.h"
 // Terminal GLFWApp::terminal = Terminal(0,0);
 
-GLFWApp::GLFWApp() : terminal(1920, 1080) {
+GLFWApp::GLFWApp() : terminal(1920, 1080), view(terminal) {
   glfwInit();
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -86,8 +86,8 @@ void GLFWApp::mainloop() {
   glViewport(0, 0, width, height);
   glClear(GL_COLOR_BUFFER_BIT);
   auto renderer = new TextRenderer();
-  terminal.set_renderer(renderer);
-  terminal.set_window_size(width, height);
+  view.set_renderer(renderer);
+  view.set_window_size(width, height);
 
   std::println("Main looping ");
 
@@ -98,12 +98,12 @@ void GLFWApp::mainloop() {
     if (output.find('\x04') != std::string::npos) {
       glfwSetWindowShouldClose(window, true);
     }
-    terminal.update_cursor_blink();
-    terminal.show_buffer();
+    view.update_cursor_blink();
+    view.render();
 
     glfwSwapBuffers(window);
     glfwPollEvents();
-    terminal.show_buffer();
+    view.render();
     // glfwSwapBuffers(window);
   }
 }
@@ -118,14 +118,14 @@ void GLFWApp::on_scroll(double /*xoffset*/, double yoffset) {
     terminal.scroll_down();
     terminal.scroll_down();
   }
-  terminal.show_buffer();
+  view.render();
 }
 
 void GLFWApp::on_resize(int width, int height) {
   glViewport(0, 0, width, height);
-  terminal.set_window_size(width, height);
+  view.set_window_size(width, height);
   // glClear(GL_COLOR_BUFFER_BIT);
-  terminal.show_buffer();
+  view.render();
   // glfwSwapBuffers(window);
 }
 
