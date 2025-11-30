@@ -141,12 +141,57 @@ void Terminal::show_buffer() {
       float y = win_height - 50.0f;
       for (const auto &row : screen_buffer) {
         float x = 25.0f;
-        for (const auto &cell : row) {
+        // Group contiguous cells with same attributes
+        if (row.empty()) {
+          y -= 50.0f;
+          continue;
+        }
+
+        std::string current_segment_text;
+        TerminalAttributes current_attrs = row[0].attributes;
+
+        for (size_t i = 0; i < row.size(); ++i) {
+          const auto &cell = row[i];
+          // Check if attributes match (simple check)
+          bool attrs_match =
+              (cell.attributes.foreground == current_attrs.foreground &&
+               cell.attributes.background == current_attrs.background &&
+               cell.attributes.bold == current_attrs.bold &&
+               cell.attributes.italic == current_attrs.italic &&
+               cell.attributes.underline == current_attrs.underline &&
+               cell.attributes.reverse == current_attrs.reverse);
+
+          if (attrs_match) {
+            current_segment_text += cell.content;
+          } else {
+            // Render previous segment
+            if (!current_segment_text.empty()) {
+              float color[4];
+              get_color_for_attributes(current_attrs, color);
+
+              // Split by script to ensure correct font selection
+              for (const auto &chunk :
+                   utl::split_by_devanagari(current_segment_text)) {
+                auto pos = text_renderer->render_text_harfbuzz(
+                    chunk, {x, y}, 1.0f, color, win_width, win_height);
+                x = pos.x;
+              }
+            }
+            // Start new segment
+            current_segment_text = cell.content;
+            current_attrs = cell.attributes;
+          }
+        }
+        // Render last segment
+        if (!current_segment_text.empty()) {
           float color[4];
-          get_color_for_attributes(cell.attributes, color);
-          auto pos = text_renderer->render_text_harfbuzz(
-              cell.content, {x, y}, 1.0f, color, win_width, win_height);
-          x = pos.x;
+          get_color_for_attributes(current_attrs, color);
+          for (const auto &chunk :
+               utl::split_by_devanagari(current_segment_text)) {
+            auto pos = text_renderer->render_text_harfbuzz(
+                chunk, {x, y}, 1.0f, color, win_width, win_height);
+            x = pos.x;
+          }
         }
         y -= 50.0f;
       }
