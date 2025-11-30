@@ -170,8 +170,6 @@ void Terminal::render_line(const ParsedLine &line, float &y_pos) {
   }
   // Move to the next line (hard wrap for the end of the line)
   y_pos -= LINE_HEIGHT;
-  cursor_pos.y = y_pos;
-  cursor_pos.x = 25.0f;
 }
 
 void Terminal::show_buffer() {
@@ -389,7 +387,32 @@ void Terminal::show_buffer() {
       // Render active_line
       if (parsed_buffer.size() >= start_index &&
           parsed_buffer.size() < start_index + max_lines) {
+        float current_line_y =
+            start_y; // Capture Y before render_line modifies it
         render_line(active_line, start_y);
+
+        // Calculate cursor position for Normal Mode
+        float cursor_x = 25.0f;
+        for (const auto &segment : active_line.segments) {
+          for (const auto &chunk : utl::split_by_devanagari(segment.content)) {
+            size_t temp_pos = 0;
+            unsigned int first_cp = utl::get_next_codepoint(chunk, temp_pos);
+            if (utl::is_devanagari(first_cp)) {
+              cursor_x += text_renderer->measure_text_width(chunk, 1.0f);
+            } else {
+              // ASCII/Latin: Grid alignment
+              size_t len = 0;
+              size_t pos = 0;
+              while (pos < chunk.length()) {
+                utl::get_next_codepoint(chunk, pos);
+                len++;
+              }
+              cursor_x += len * CELL_WIDTH;
+            }
+          }
+        }
+        cursor_pos.x = cursor_x;
+        cursor_pos.y = current_line_y;
       }
     }
   }
@@ -401,37 +424,19 @@ void Terminal::show_buffer() {
   }
 }
 
-void Terminal::render_cursor(float x, float y, float scale, int width,
-                             int height) {
-  glUseProgram(0); // Unbind any active shader to use fixed-function pipeline
-  glDisable(GL_TEXTURE_2D);
-  glColor4f(1.0f, 1.0f, 1.0f, 1.0f); // White cursor
+void Terminal::render_cursor(float x, float y, float /*scale*/, int /*width*/,
+                             int /*height*/) {
+  if (text_renderer) {
+    // Use a white color for the cursor
+    float color[4] = {1.0f, 1.0f, 1.0f, 1.0f}; // White cursor
 
-  // Adjust cursor size if not provided
-  float w = (width > 0 ? width : 10.0f) * scale;
-  float h = (height > 0 ? height : 20.0f) * scale;
+    // Invert color if we are on top of text?
+    // For now simple block cursor is fine.
+    // Use CELL_WIDTH and LINE_HEIGHT for cursor size to match grid
 
-  glMatrixMode(GL_PROJECTION);
-  glPushMatrix();
-  glLoadIdentity();
-  glOrtho(0.0f, win_width, 0.0f, win_height, -1.0f, 1.0f);
-  glMatrixMode(GL_MODELVIEW);
-  glPushMatrix();
-  glLoadIdentity();
-
-  glBegin(GL_QUADS);
-  glVertex2f(x, y);
-  glVertex2f(x + w, y);
-  glVertex2f(x + w, y + h);
-  glVertex2f(x, y + h);
-  glEnd();
-
-  glPopMatrix();
-  glMatrixMode(GL_PROJECTION);
-  glPopMatrix();
-  glMatrixMode(GL_MODELVIEW);
-
-  glEnable(GL_TEXTURE_2D);
+    text_renderer->draw_solid_rectangle(x, y, CELL_WIDTH, LINE_HEIGHT, color,
+                                        win_width, win_height);
+  }
 }
 
 void Terminal::update_cursor_blink() {
@@ -510,11 +515,11 @@ std::string Terminal::poll_output() {
           size_t pos = 0;
           while (pos < pending_utf8.length()) {
             // Check if we have a full codepoint
-            // We use a modified check because get_next_codepoint consumes bytes
-            // We need to peek or just try and see if it returns valid or 0 (if
-            // incomplete) But get_next_codepoint returns 0 for end of string.
-            // Let's implement a simple check here or use get_next_codepoint
-            // carefully.
+            // We use a modified check because get_next_codepoint consumes
+            // bytes We need to peek or just try and see if it returns valid
+            // or 0 (if incomplete) But get_next_codepoint returns 0 for end
+            // of string. Let's implement a simple check here or use
+            // get_next_codepoint carefully.
 
             // Simple UTF-8 length check
             unsigned char byte = pending_utf8[pos];
@@ -628,7 +633,8 @@ std::string Terminal::poll_output() {
             // But if it was a full clear, maybe we should?
             // Let's trust the sequence.
             if (mode == 3) {
-              // Clear scrollback too (not implemented yet for alternate screen)
+              // Clear scrollback too (not implemented yet for alternate
+              // screen)
             }
           } else if (mode == 0) {
             // Cursor to end
