@@ -95,7 +95,8 @@ Terminal::~Terminal() {
 
 void Terminal::render_line(const ParsedLine &line, float &y_pos) {
   float start_x = 25.0f;
-  int col_index = 0;
+  float current_x = start_x;
+  float limit_x = start_x + screen_cols * CELL_WIDTH;
 
   // Render each segment of the line with its own attributes
   for (const auto &segment : line.segments) {
@@ -120,51 +121,47 @@ void Terminal::render_line(const ParsedLine &line, float &y_pos) {
 
     // Split segment into words/chunks
     for (auto &chunk : utl::split_by_devanagari(segment.content)) {
-      // Let's iterate codepoints to track col_index.
-      size_t pos = 0;
-      std::string current_run;
-      int run_start_col = col_index;
+      size_t temp_pos = 0;
+      unsigned int first_cp = utl::get_next_codepoint(chunk, temp_pos);
+      float baseline_offset = LINE_HEIGHT * 0.25f;
 
-      while (pos < chunk.length()) {
-        size_t prev_pos = pos;
-        unsigned int cp = utl::get_next_codepoint(chunk, pos);
-        (void)cp; // Suppress unused variable warning
-        std::string char_str = chunk.substr(prev_pos, pos - prev_pos);
+      if (utl::is_devanagari(first_cp)) {
+        float w = text_renderer->measure_text_width(chunk, 1.0f);
+        if (current_x + w > limit_x) {
+          y_pos -= LINE_HEIGHT;
+          current_x = start_x;
+        }
+        // Render BG
+        text_renderer->draw_solid_rectangle(current_x, y_pos, w, LINE_HEIGHT,
+                                            bg_color, win_width, win_height);
+        // Render Text
+        text_renderer->render_text_harfbuzz(
+            chunk, {current_x, y_pos + baseline_offset}, 1.0f, color, win_width,
+            win_height);
+        current_x += w;
+      } else {
+        // ASCII/Latin: Render char by char for grid alignment
+        size_t pos = 0;
+        while (pos < chunk.length()) {
+          size_t prev_pos = pos;
+          utl::get_next_codepoint(chunk, pos);
+          std::string char_str = chunk.substr(prev_pos, pos - prev_pos);
 
-        if (col_index >= screen_cols) {
-          // Flush current run
-          if (!current_run.empty()) {
-            float x = start_x + run_start_col * CELL_WIDTH;
-            (void)x; // Suppress unused variable warning
-            float w = (col_index - run_start_col) * CELL_WIDTH;
-            float baseline_offset = LINE_HEIGHT * 0.25f;
-            text_renderer->draw_solid_rectangle(
-                x, y_pos, w, LINE_HEIGHT, bg_color, win_width, win_height);
-            text_renderer->render_text_harfbuzz(
-                current_run, {x, y_pos + baseline_offset}, 1.0f, color,
-                win_width, win_height);
-            current_run.clear();
+          if (current_x + CELL_WIDTH > limit_x) {
+            y_pos -= LINE_HEIGHT;
+            current_x = start_x;
           }
 
-          y_pos -= LINE_HEIGHT;
-          col_index = 0;
-          run_start_col = 0;
+          // Render BG
+          text_renderer->draw_solid_rectangle(current_x, y_pos, CELL_WIDTH,
+                                              LINE_HEIGHT, bg_color, win_width,
+                                              win_height);
+          // Render Text
+          text_renderer->render_text_harfbuzz(
+              char_str, {current_x, y_pos + baseline_offset}, 1.0f, color,
+              win_width, win_height);
+          current_x += CELL_WIDTH;
         }
-
-        current_run += char_str;
-        col_index++;
-      }
-
-      // Flush remaining
-      if (!current_run.empty()) {
-        float x = start_x + run_start_col * CELL_WIDTH;
-        float w = (col_index - run_start_col) * CELL_WIDTH;
-        float baseline_offset = LINE_HEIGHT * 0.25f;
-        text_renderer->draw_solid_rectangle(x, y_pos, w, LINE_HEIGHT, bg_color,
-                                            win_width, win_height);
-        text_renderer->render_text_harfbuzz(current_run,
-                                            {x, y_pos + baseline_offset}, 1.0f,
-                                            color, win_width, win_height);
       }
     }
   }
@@ -393,12 +390,20 @@ void Terminal::show_buffer() {
 
         // Calculate cursor position for Normal Mode
         float cursor_x = 25.0f;
+        float cursor_y = current_line_y;
+        float limit_x = 25.0f + screen_cols * CELL_WIDTH;
+
         for (const auto &segment : active_line.segments) {
           for (const auto &chunk : utl::split_by_devanagari(segment.content)) {
             size_t temp_pos = 0;
             unsigned int first_cp = utl::get_next_codepoint(chunk, temp_pos);
             if (utl::is_devanagari(first_cp)) {
-              cursor_x += text_renderer->measure_text_width(chunk, 1.0f);
+              float w = text_renderer->measure_text_width(chunk, 1.0f);
+              if (cursor_x + w > limit_x) {
+                cursor_y -= LINE_HEIGHT;
+                cursor_x = 25.0f;
+              }
+              cursor_x += w;
             } else {
               // ASCII/Latin: Grid alignment
               size_t len = 0;
@@ -407,12 +412,18 @@ void Terminal::show_buffer() {
                 utl::get_next_codepoint(chunk, pos);
                 len++;
               }
-              cursor_x += len * CELL_WIDTH;
+              for (size_t i = 0; i < len; ++i) {
+                if (cursor_x + CELL_WIDTH > limit_x) {
+                  cursor_y -= LINE_HEIGHT;
+                  cursor_x = 25.0f;
+                }
+                cursor_x += CELL_WIDTH;
+              }
             }
           }
         }
         cursor_pos.x = cursor_x;
-        cursor_pos.y = current_line_y;
+        cursor_pos.y = cursor_y;
       }
     }
   }
