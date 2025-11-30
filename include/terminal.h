@@ -55,6 +55,8 @@ public:
   int screen_cols = 80;
   int scroll_region_top = 0;
   int scroll_region_bottom = -1; // -1 means bottom of screen
+  std::string
+      pending_utf8; // Buffer for incomplete UTF-8 sequences in alternate screen
 
   // Helper functions
   void update_cursor_blink();

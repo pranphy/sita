@@ -278,16 +278,54 @@ std::string Terminal::poll_output() {
         // Handle actions in screen mode
         if (action.type == ActionType::PRINT_TEXT) {
           for (char c : action.text) {
+            pending_utf8 += c;
+          }
+
+          size_t pos = 0;
+          while (pos < pending_utf8.length()) {
+            // Check if we have a full codepoint
+            // We use a modified check because get_next_codepoint consumes bytes
+            // We need to peek or just try and see if it returns valid or 0 (if
+            // incomplete) But get_next_codepoint returns 0 for end of string.
+            // Let's implement a simple check here or use get_next_codepoint
+            // carefully.
+
+            // Simple UTF-8 length check
+            unsigned char byte = pending_utf8[pos];
+            int needed = 0;
+            if ((byte & 0x80) == 0)
+              needed = 1;
+            else if ((byte & 0xE0) == 0xC0)
+              needed = 2;
+            else if ((byte & 0xF0) == 0xE0)
+              needed = 3;
+            else if ((byte & 0xF8) == 0xF0)
+              needed = 4;
+            else
+              needed = 1; // Invalid, treat as 1
+
+            if (pos + needed > pending_utf8.length()) {
+              // Incomplete, stop processing and keep remaining in buffer
+              break;
+            }
+
+            std::string char_str = pending_utf8.substr(pos, needed);
+            pos += needed;
+
             if (screen_cursor_row < screen_rows &&
                 screen_cursor_col < screen_cols) {
               screen_buffer[screen_cursor_row][screen_cursor_col] =
-                  Cell{std::string(1, c), action.attributes};
+                  Cell{char_str, action.attributes};
               screen_cursor_col++;
               if (screen_cursor_col >= screen_cols) {
                 screen_cursor_col = 0;
                 screen_cursor_row++;
               }
             }
+          }
+
+          if (pos > 0) {
+            pending_utf8.erase(0, pos);
           }
         } else if (action.type == ActionType::NEWLINE) {
           screen_cursor_row++;
