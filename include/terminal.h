@@ -46,13 +46,23 @@ public:
   bool cursor_visible;
   int scroll_offset = 0;
 
+  // Alternate screen buffer for apps like vim
+  bool alternate_screen_active = false;
+  std::vector<std::vector<Cell>> screen_buffer; // 2D grid
+  int screen_cursor_row = 0;
+  int screen_cursor_col = 0;
+  int screen_rows = 24;
+  int screen_cols = 80;
+  int scroll_region_top = 0;
+  int scroll_region_bottom = -1; // -1 means bottom of screen
+
   // Helper functions
   void update_cursor_blink();
 
   TextRenderer *text_renderer;
   std::vector<ParsedLine> parsed_buffer;
-
-  std::string active_raw_line;
+  ParsedLine active_line; // Replaces active_raw_line for better color support
+  // std::string active_raw_line; // Deprecated
   bool last_char_was_newline = true;
   Coord cursor_pos;
   TerminalParser parser;

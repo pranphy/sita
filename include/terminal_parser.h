@@ -6,37 +6,47 @@
 #include <string>
 #include <vector>
 
-// Terminal line types for different rendering
-enum class LineType {
-  PROMPT,
-  COMMAND_OUTPUT,
-  ERROR_OUTPUT,
-  USER_INPUT,
-  UNKNOWN
+enum class ActionType {
+  PRINT_TEXT,
+  NEWLINE,
+  CARRIAGE_RETURN,
+  BACKSPACE,
+  MOVE_CURSOR,
+  CLEAR_SCREEN,
+  CLEAR_LINE,
+  SET_ALTERNATE_BUFFER,
+  SET_ATTRIBUTE,
+  SCROLL_UP,
+  SCROLL_DOWN,
+  INSERT_LINE,
+  DELETE_LINE,
+  INSERT_CHAR,
+  DELETE_CHAR,
+  SET_SCROLL_REGION,
+  REPORT_CURSOR_POSITION,
+  REPORT_DEVICE_STATUS
 };
 
-// ANSI color codes
 enum class AnsiColor {
-  BLACK = 30,
-  RED = 31,
-  GREEN = 32,
-  YELLOW = 33,
-  BLUE = 34,
-  MAGENTA = 35,
-  CYAN = 36,
-  WHITE = 37,
-  BRIGHT_BLACK = 90,
-  BRIGHT_RED = 91,
-  BRIGHT_GREEN = 92,
-  BRIGHT_YELLOW = 93,
-  BRIGHT_BLUE = 94,
-  BRIGHT_MAGENTA = 95,
-  BRIGHT_CYAN = 96,
-  BRIGHT_WHITE = 97,
-  RESET = 0
+  BLACK,
+  RED,
+  GREEN,
+  YELLOW,
+  BLUE,
+  MAGENTA,
+  CYAN,
+  WHITE,
+  BRIGHT_BLACK,
+  BRIGHT_RED,
+  BRIGHT_GREEN,
+  BRIGHT_YELLOW,
+  BRIGHT_BLUE,
+  BRIGHT_MAGENTA,
+  BRIGHT_CYAN,
+  BRIGHT_WHITE,
+  RESET
 };
 
-// Terminal attributes
 struct TerminalAttributes {
   AnsiColor foreground = AnsiColor::WHITE;
   AnsiColor background = AnsiColor::BLACK;
@@ -48,17 +58,21 @@ struct TerminalAttributes {
   bool strikethrough = false;
 };
 
-// Styled text segment
-struct StyledSegment {
-  std::string content;
-  TerminalAttributes attributes;
+struct TerminalAction {
+  ActionType type;
+  std::string text = "";
+  TerminalAttributes attributes = {};
+  int row = 0;
+  int col = 0;
+  bool flag = false; // For boolean toggles like alternate buffer
 };
 
-// Parsed terminal line
-struct ParsedLine {
-  std::vector<StyledSegment> segments;
-  LineType type;
-  bool clear_screen = false;
+enum class LineType {
+  PROMPT,
+  COMMAND_OUTPUT,
+  ERROR_OUTPUT,
+  USER_INPUT,
+  UNKNOWN
 };
 
 struct Cell {
@@ -66,31 +80,67 @@ struct Cell {
   TerminalAttributes attributes;
 };
 
+struct Segment {
+  std::string content;
+  TerminalAttributes attributes;
+};
+
+struct ParsedLine {
+  std::vector<Segment> segments;
+  LineType type;
+  bool clear_screen = false;
+};
+
 class TerminalParser {
 public:
   TerminalParser();
+  std::vector<TerminalAction> parse_input(const std::string &input);
+
+  // Deprecated, kept for compatibility during refactor
   std::vector<ParsedLine> parse_output(const std::string &output);
-  std::string strip_escape_sequences(const std::string &text);
-  bool is_prompt(const std::string &line);
-  bool is_command_output(const std::string &line);
-  bool is_error_output(const std::string &line);
 
 private:
-  // Common prompt patterns
-  std::vector<std::regex> prompt_patterns;
+  enum class State {
+    NORMAL,
+    ESCAPE,
+    CSI,     // [
+    STR,     // ] or P or _ or ^
+    STR_END, // ST (String Terminator)
+    ALT_CHARSET
+  };
 
-  // ANSI escape sequence patterns
-  std::regex escape_sequence_regex;
-  std::regex color_escape_regex;
-  std::regex cursor_escape_regex;
+  State state = State::NORMAL;
+  std::string escape_buf;
+  std::vector<int> csi_args;
+  std::string str_buf;
+  char csi_mode = 0;
+  bool csi_priv = false;
 
-  // Current terminal state
   TerminalAttributes current_attributes;
   struct CursorPosition {
     int row;
     int col;
   };
   CursorPosition current_cursor;
+
+  std::vector<std::regex> prompt_patterns;
+
+  // Helper methods for state machine
+  void process_char(char c, std::vector<TerminalAction> &actions);
+  void handle_control_code(char c, std::vector<TerminalAction> &actions);
+  void handle_escape(char c, std::vector<TerminalAction> &actions);
+  void handle_csi(char c, std::vector<TerminalAction> &actions);
+  void parse_csi_params();
+  void handle_str(char c);
+
+  // Action helpers
+  void update_attributes(const std::vector<int> &params);
+  AnsiColor parse_color(int code);
+
+  // Old helpers
+  std::regex escape_sequence_regex;
+  std::regex color_escape_regex;
+  std::regex cursor_escape_regex;
 
   // Helper functions
   TerminalAttributes parse_escape_sequence(const std::string &escape_seq);
@@ -103,6 +153,11 @@ private:
 
   AnsiColor parse_color_code(int code);
   void update_attributes_from_code(int code);
+
+  std::string strip_escape_sequences(const std::string &text);
+  bool is_prompt(const std::string &line);
+  bool is_command_output(const std::string &line);
+  bool is_error_output(const std::string &line);
 };
 
 #endif // TERMINAL_PARSER_H

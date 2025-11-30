@@ -1,5 +1,7 @@
 #include "terminal_parser.h"
 #include "utils.h"
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 
@@ -20,320 +22,272 @@ TerminalParser::TerminalParser() {
 ]*[$#>] $)")};
 
   // Initialize escape sequence patterns
-  // Matches CSI ([\x1b[...]) and OSC ([\x1b]...])
   escape_sequence_regex =
       std::regex(R"(\x1b(\[[0-9;? ]*[a-zA-Z]|].*?(\x07|\x1b\\)))");
   color_escape_regex = std::regex(R"(\x1b\[([0-9;]+)m)");
   cursor_escape_regex = std::regex(R"(\x1b\[(\d+);(\d+)H)");
 }
 
-std::vector<ParsedLine>
-TerminalParser::parse_output(const std::string &output) {
-  std::vector<ParsedLine> parsed_lines;
-  std::vector<std::string> lines = utl::split_by_newline(output);
-
-  for (const auto &line : lines) {
-    std::vector<Cell> cells;
-    int cursor_x = 0;
-    bool line_clears_screen = false;
-
-    // Process the line character by character (or chunk by chunk for escapes)
-    size_t current_pos = 0;
-    auto it =
-        std::sregex_iterator(line.begin(), line.end(), escape_sequence_regex);
-    auto end = std::sregex_iterator();
-
-    while (current_pos < line.length()) {
-      // Check if there's an escape sequence at current_pos
-      if (it != end && (size_t)it->position() == current_pos) {
-        std::string escape_seq = it->str();
-
-        // Check for Erase in Line (EL) - \x1b[K or \x1b[nK
-        std::regex el_regex(R"(\x1b\[(\d*)K)");
-        std::smatch match;
-        if (std::regex_search(escape_seq, match, el_regex)) {
-          int mode = 0;
-          if (match[1].length() > 0) {
-            mode = std::stoi(match[1].str());
-          }
-
-          if (mode == 0) { // Erase from cursor to end of line
-            if (cursor_x < (int)cells.size()) {
-              cells.resize(cursor_x);
-            }
-          } else if (mode == 1) { // Erase from start to cursor
-            for (int i = 0; i <= cursor_x && i < (int)cells.size(); ++i) {
-              cells[i] = Cell{" ", current_attributes};
-            }
-          } else if (mode == 2) { // Erase entire line
-            cells.clear();
-            cursor_x = 0;
-          }
-        } else {
-          // Check for Erase in Display (ED) - \x1b[J or \x1b[nJ
-          std::regex ed_regex(R"(\x1b\[(\d*)J)");
-          if (std::regex_search(escape_seq, match, ed_regex)) {
-            int mode = 0;
-            if (match[1].length() > 0) {
-              mode = std::stoi(match[1].str());
-            }
-            if (mode == 2 || mode == 3) {
-              // Clear screen/scrollback
-              cells.clear();
-              cursor_x = 0;
-              line_clears_screen = true;
-            }
-          }
-          // Other escape sequences (colors, cursor move, etc.)
-          current_attributes = parse_escape_sequence(escape_seq);
-        }
-
-        current_pos += it->length();
-        it++;
-        continue;
-      }
-
-      // Check for next escape sequence position
-      size_t next_escape_pos = (it != end) ? it->position() : line.length();
-
-      // Process text up to next escape sequence
-      while (current_pos < next_escape_pos) {
-        char c = line[current_pos];
-
-        if (c == '\b') {
-          if (cursor_x > 0)
-            cursor_x--;
-        } else if (c == '\r') {
-          cursor_x = 0;
-        } else if (c == '\t') {
-          // Tab stop every 8 spaces
-          int next_tab = (cursor_x / 8 + 1) * 8;
-          // Fill with spaces
-          while (cursor_x < next_tab) {
-            if (cursor_x >= (int)cells.size()) {
-              cells.push_back(Cell{" ", current_attributes});
-            } else {
-              cells[cursor_x] = Cell{" ", current_attributes};
-            }
-            cursor_x++;
-          }
-        } else if ((unsigned char)c >= 32) { // Printable character
-          std::string char_str(1, c);
-
-          if (cursor_x >= (int)cells.size()) {
-            cells.resize(cursor_x + 1);
-          }
-          cells[cursor_x] = Cell{char_str, current_attributes};
-          cursor_x++;
-        }
-        // Ignore other control characters for now
-
-        current_pos++;
-      }
-    }
-
-    // Convert cells to segments
-    ParsedLine parsed_line;
-    parsed_line.type = LineType::UNKNOWN;
-    parsed_line.clear_screen = line_clears_screen;
-
-    if (cells.empty()) {
-      // Empty line
-      parsed_line.segments.push_back({"", current_attributes});
-    } else {
-      std::string current_content;
-      TerminalAttributes last_attrs = cells[0].attributes;
-
-      for (const auto &cell : cells) {
-        // If attributes changed (and content is not empty), push segment
-        // Note: empty cells (from resize) might have default attributes
-        if (cell.content.empty())
-          continue;
-
-        // Simple comparison of attributes (we might need operator==)
-        // For now, let's just check if memory matches or implement a helper
-        // Or just push a new segment for every cell? No, that's inefficient.
-        // Let's assume we can compare.
-        bool attrs_changed =
-            (cell.attributes.foreground != last_attrs.foreground ||
-             cell.attributes.background != last_attrs.background ||
-             cell.attributes.bold != last_attrs.bold); // etc...
-
-        if (attrs_changed) {
-          if (!current_content.empty()) {
-            parsed_line.segments.push_back({current_content, last_attrs});
-            current_content.clear();
-          }
-          last_attrs = cell.attributes;
-        }
-        current_content += cell.content;
-      }
-      if (!current_content.empty()) {
-        parsed_line.segments.push_back({current_content, last_attrs});
-      }
-    }
-
-    // Detect line type
-    std::string full_content;
-    for (const auto &seg : parsed_line.segments)
-      full_content += seg.content;
-
-    if (is_prompt(full_content)) {
-      parsed_line.type = LineType::PROMPT;
-    } else if (is_error_output(full_content)) {
-      parsed_line.type = LineType::ERROR_OUTPUT;
-    } else {
-      parsed_line.type = LineType::COMMAND_OUTPUT;
-    }
-
-    parsed_lines.push_back(parsed_line);
+std::vector<TerminalAction>
+TerminalParser::parse_input(const std::string &input) {
+  std::vector<TerminalAction> actions;
+  for (char c : input) {
+    process_char(c, actions);
   }
-
-  return parsed_lines;
+  return actions;
 }
 
-std::string TerminalParser::strip_escape_sequences(const std::string &text) {
-  std::string result = text;
-  result = std::regex_replace(result, escape_sequence_regex, "");
-  return result;
+void TerminalParser::process_char(char c,
+                                  std::vector<TerminalAction> &actions) {
+  if (state == State::NORMAL) {
+    if (c == '\033') { // ESC
+      state = State::ESCAPE;
+      escape_buf.clear();
+      csi_args.clear();
+      csi_priv = false;
+    } else if (c == '\n') {
+      actions.push_back({ActionType::NEWLINE});
+    } else if (c == '\r') {
+      actions.push_back({ActionType::CARRIAGE_RETURN});
+    } else if (c == '\b') {
+      actions.push_back({ActionType::BACKSPACE});
+    } else if ((unsigned char)c >= 32) {
+      actions.push_back(
+          {ActionType::PRINT_TEXT, std::string(1, c), current_attributes});
+    }
+  } else if (state == State::ESCAPE) {
+    handle_escape(c, actions);
+  } else if (state == State::CSI) {
+    handle_csi(c, actions);
+  } else if (state == State::STR) {
+    handle_str(c);
+  } else if (state == State::ALT_CHARSET) {
+    // Just consume one character (the charset designator) and return to normal
+    state = State::NORMAL;
+  }
 }
 
-TerminalAttributes
-TerminalParser::parse_escape_sequence(const std::string &escape_seq) {
-  if (escape_seq.empty()) {
-    return current_attributes;
-  }
-
-  std::smatch match;
-  if (std::regex_search(escape_seq, match, color_escape_regex)) {
-    std::string codes_str = match[1].str();
-    std::istringstream iss(codes_str);
-    std::string code_str;
-
-    while (std::getline(iss, code_str, ';')) {
-      if (!code_str.empty()) {
-        int code = std::stoi(code_str);
-        update_attributes_from_code(code);
-      }
-    }
-  } else if (std::regex_search(escape_seq, match, cursor_escape_regex)) {
-    CursorPosition pos = parse_cursor_escape(escape_seq);
-    move_cursor(pos.row, pos.col);
+void TerminalParser::handle_escape(char c,
+                                   std::vector<TerminalAction> &actions) {
+  if (c == '[') {
+    state = State::CSI;
+    csi_args.clear();
+    csi_priv = false;
+    escape_buf.clear();
+  } else if (c == ']' || c == 'P' || c == '_' || c == '^' || c == 'X') {
+    // OSC, DCS, APC, PM, SOS - Start string sequence
+    state = State::STR;
+    str_buf.clear();
+  } else if (c == '(' || c == ')') {
+    state = State::ALT_CHARSET;
   } else {
-    // Check for Erase in Line (EL) - \x1b[K or \x1b[nK
-    std::regex el_regex(R"(\x1b\[(\d*)K)");
-    if (std::regex_search(escape_seq, match, el_regex)) {
-      int mode = 0;
-      if (match[1].length() > 0) {
-        mode = std::stoi(match[1].str());
+    state = State::NORMAL;
+  }
+}
+
+void TerminalParser::handle_csi(char c, std::vector<TerminalAction> &actions) {
+  if (isdigit(c)) {
+    escape_buf += c;
+  } else if (c == ';') {
+    if (!escape_buf.empty()) {
+      try {
+        csi_args.push_back(std::stoi(escape_buf));
+      } catch (...) {
+        csi_args.push_back(0);
       }
-      erase_in_line(mode);
+      escape_buf.clear();
+    } else {
+      csi_args.push_back(0); // Default to 0 if empty
     }
-
-    // Check for Erase in Display (ED) - \x1b[J or \x1b[nJ
-    std::regex ed_regex(R"(\x1b\[(\d*)J)");
-    if (std::regex_search(escape_seq, match, ed_regex)) {
-      int mode = 0;
-      if (match[1].length() > 0) {
-        mode = std::stoi(match[1].str());
+  } else if (c == '?') {
+    csi_priv = true;
+  } else if (c == ' ') {
+    // Ignore intermediate space
+  } else {
+    // Final character of CSI sequence
+    if (!escape_buf.empty()) {
+      try {
+        csi_args.push_back(std::stoi(escape_buf));
+      } catch (...) {
+        csi_args.push_back(0);
       }
-      erase_in_display(mode);
+    }
+
+    // Process the CSI command
+    switch (c) {
+    case 'm': // SGR - Select Graphic Rendition
+      update_attributes(csi_args);
+      break;
+    case 'J': // ED - Erase in Display
+    {
+      int mode = csi_args.empty() ? 0 : csi_args[0];
+      if (mode == 2 || mode == 3) {
+        actions.push_back({ActionType::CLEAR_SCREEN});
+      }
+    } break;
+    case 'K': // EL - Erase in Line
+      actions.push_back({ActionType::CLEAR_LINE});
+      break;
+    case 'A': // CUU - Cursor Up
+    {
+      int n = csi_args.empty() ? 1 : csi_args[0];
+      actions.push_back({ActionType::MOVE_CURSOR, "", {}, -n, 0});
+    } break;
+    case 'B': // CUD - Cursor Down
+    {
+      int n = csi_args.empty() ? 1 : csi_args[0];
+      actions.push_back({ActionType::MOVE_CURSOR, "", {}, n, 0});
+    } break;
+    case 'C': // CUF - Cursor Forward
+    {
+      int n = csi_args.empty() ? 1 : csi_args[0];
+      actions.push_back({ActionType::MOVE_CURSOR, "", {}, 0, n});
+    } break;
+    case 'D': // CUB - Cursor Backward
+    {
+      int n = csi_args.empty() ? 1 : csi_args[0];
+      actions.push_back({ActionType::MOVE_CURSOR, "", {}, 0, -n});
+    } break;
+    case 'H': // CUP - Cursor Position
+    case 'f': // HVP - Horizontal and Vertical Position
+    {
+      int row = (csi_args.size() > 0) ? csi_args[0] : 1;
+      int col = (csi_args.size() > 1) ? csi_args[1] : 1;
+      actions.push_back({ActionType::MOVE_CURSOR,
+                         "",
+                         {},
+                         row,
+                         col,
+                         true}); // flag true for absolute
+    } break;
+    case 'h': // SM - Set Mode
+      if (csi_priv) {
+        if (csi_args.size() > 0 && csi_args[0] == 1049) {
+          actions.push_back(
+              {ActionType::SET_ALTERNATE_BUFFER, "", {}, 0, 0, true});
+        }
+      }
+      break;
+    case 'l': // RM - Reset Mode
+      if (csi_priv) {
+        if (csi_args.size() > 0 && csi_args[0] == 1049) {
+          actions.push_back(
+              {ActionType::SET_ALTERNATE_BUFFER, "", {}, 0, 0, false});
+        }
+      }
+      break;
+    case 'L': // IL - Insert Line
+    {
+      int n = csi_args.empty() ? 1 : csi_args[0];
+      actions.push_back({ActionType::INSERT_LINE, "", {}, n});
+    } break;
+    case 'M': // DL - Delete Line
+    {
+      int n = csi_args.empty() ? 1 : csi_args[0];
+      actions.push_back({ActionType::DELETE_LINE, "", {}, n});
+    } break;
+    case '@': // ICH - Insert Character
+    {
+      int n = csi_args.empty() ? 1 : csi_args[0];
+      actions.push_back({ActionType::INSERT_CHAR, "", {}, n});
+    } break;
+    case 'P': // DCH - Delete Character
+    {
+      int n = csi_args.empty() ? 1 : csi_args[0];
+      actions.push_back({ActionType::DELETE_CHAR, "", {}, n});
+    } break;
+    case 'r': // DECSTBM - Set Scrolling Region
+    {
+      int top = (csi_args.size() > 0) ? csi_args[0] : 1;
+      int bottom = (csi_args.size() > 1) ? csi_args[1] : 0; // 0 means end
+      actions.push_back({ActionType::SET_SCROLL_REGION, "", {}, top, bottom});
+    } break;
+    case 'n': // DSR - Device Status Report
+    {
+      int arg = csi_args.empty() ? 0 : csi_args[0];
+      if (arg == 6) {
+        actions.push_back({ActionType::REPORT_CURSOR_POSITION});
+      } else if (arg == 5) {
+        actions.push_back({ActionType::REPORT_DEVICE_STATUS});
+      }
+    } break;
+    }
+    state = State::NORMAL;
+  }
+}
+
+void TerminalParser::handle_str(char c) {
+  if (c == '\007' ||
+      (c == '\\' && !str_buf.empty() && str_buf.back() == '\033')) {
+    // End of string sequence (BEL or ST)
+    state = State::NORMAL;
+  } else {
+    str_buf += c;
+  }
+}
+
+void TerminalParser::update_attributes(const std::vector<int> &params) {
+  if (params.empty()) {
+    update_attributes_from_code(0);
+    return;
+  }
+  for (size_t i = 0; i < params.size(); ++i) {
+    int code = params[i];
+    if (code == 38 || code == 48) {
+      // Extended color
+      if (i + 1 < params.size()) {
+        int mode = params[i + 1];
+        if (mode == 5) { // 256 color
+          if (i + 2 < params.size()) {
+            i += 2;
+          }
+        } else if (mode == 2) { // TrueColor
+          if (i + 4 < params.size()) {
+            i += 4;
+          }
+        }
+      }
+    } else {
+      update_attributes_from_code(code);
     }
   }
-
-  return current_attributes;
 }
 
-bool TerminalParser::is_prompt(const std::string &line) {
-  for (const auto &pattern : prompt_patterns) {
-    if (std::regex_search(line, pattern)) {
-      return true;
+void TerminalParser::update_attributes_from_code(int code) {
+  switch (code) {
+  case 0:
+    current_attributes = TerminalAttributes{};
+    break;
+  case 1:
+    current_attributes.bold = true;
+    break;
+  case 3:
+    current_attributes.italic = true;
+    break;
+  case 4:
+    current_attributes.underline = true;
+    break;
+  case 5:
+    current_attributes.blink = true;
+    break;
+  case 7:
+    current_attributes.reverse = true;
+    break;
+  case 9:
+    current_attributes.strikethrough = true;
+    break;
+  default:
+    if (code >= 30 && code <= 37) {
+      current_attributes.foreground = parse_color_code(code);
+    } else if (code >= 40 && code <= 47) {
+      current_attributes.background = parse_color_code(code - 10);
+    } else if (code >= 90 && code <= 97) {
+      current_attributes.foreground = parse_color_code(code);
+    } else if (code >= 100 && code <= 107) {
+      current_attributes.background = parse_color_code(code - 10);
     }
+    break;
   }
-  return false;
-}
-
-bool TerminalParser::is_command_output(const std::string &line) {
-  return !line.empty() && !is_prompt(line) && !is_error_output(line);
-}
-
-bool TerminalParser::is_error_output(const std::string &line) {
-  std::vector<std::string> error_indicators = {
-      "error:", "Error:", "ERROR:", "warning:",  "Warning:",  "WARNING:",
-      "fatal:", "Fatal:", "FATAL:", "cannot",    "Cannot",    "CANNOT",
-      "failed", "Failed", "FAILED", "not found", "Not found", "NOT FOUND"};
-
-  for (const auto &indicator : error_indicators) {
-    if (line.find(indicator) != std::string::npos) {
-      return true;
-    }
-  }
-  return false;
-}
-
-TerminalParser::CursorPosition
-TerminalParser::parse_cursor_escape(const std::string &escape_seq) {
-  CursorPosition pos;
-  std::smatch match;
-
-  if (std::regex_search(escape_seq, match, cursor_escape_regex)) {
-    pos.row = std::stoi(match[1].str());
-    pos.col = std::stoi(match[2].str());
-  }
-
-  return pos;
-}
-
-void TerminalParser::clear_screen() { current_cursor = {0, 0}; }
-
-void TerminalParser::clear_line() {}
-
-void TerminalParser::erase_in_line(int mode) {
-  // We need to modify the current line being parsed.
-  // Since we are parsing a string into cells, and 'cells' is local to the loop
-  // in parse_output, we can't easily modify 'cells' from here directly without
-  // changing the architecture. However, parse_output calls us to update
-  // attributes.
-
-  // Wait, parse_output iterates through the line and builds 'cells'.
-  // If we encounter EL, we should modify 'cells'.
-  // But 'cells' is not a member variable.
-
-  // This architecture is slightly problematic for immediate side-effects on the
-  // buffer. But wait, the escape sequence is processed inside the loop in
-  // parse_output. We can't modify 'cells' from here because we don't have
-  // access to it.
-
-  // Alternative: parse_output should handle EL/ED logic directly or we pass
-  // 'cells' to it? Or we make 'cells' a member variable (current_line_cells)?
-
-  // For now, let's just log it or handle simple cases if possible.
-  // Actually, the current architecture parses line by line.
-  // If we have "abc\x1b[Kdef", it means "abc", then erase from cursor to end,
-  // then "def". But "erase from cursor to end" implies we overwrite existing
-  // cells with spaces? In the current 'parse_output' loop, we are building
-  // 'cells' sequentially. We haven't built the "rest of the line" yet.
-
-  // The issue is when we backspace, we move the cursor back.
-  // Then we might emit \x1b[K to clear the character under cursor.
-  // In 'parse_output', we handle backspace by moving 'cursor_x' back.
-  // If we see \x1b[K, we should clear cells starting from 'cursor_x'.
-
-  // So, we need to handle EL inside parse_output loop, similar to how we handle
-  // \b.
-}
-
-void TerminalParser::erase_in_display(int mode) {
-  // Similar issue. ED usually clears screen or part of it.
-  // If mode=2, clear everything.
-  if (mode == 2) {
-    clear_screen();
-  }
-}
-
-void TerminalParser::move_cursor(int row, int col) {
-  current_cursor.row = row;
-  current_cursor.col = col;
 }
 
 AnsiColor TerminalParser::parse_color_code(int code) {
@@ -377,39 +331,23 @@ AnsiColor TerminalParser::parse_color_code(int code) {
   }
 }
 
-void TerminalParser::update_attributes_from_code(int code) {
-  switch (code) {
-  case 0:
-    current_attributes = TerminalAttributes{};
-    break;
-  case 1:
-    current_attributes.bold = true;
-    break;
-  case 3:
-    current_attributes.italic = true;
-    break;
-  case 4:
-    current_attributes.underline = true;
-    break;
-  case 5:
-    current_attributes.blink = true;
-    break;
-  case 7:
-    current_attributes.reverse = true;
-    break;
-  case 9:
-    current_attributes.strikethrough = true;
-    break;
-  default:
-    if (code >= 30 && code <= 37) {
-      current_attributes.foreground = parse_color_code(code);
-    } else if (code >= 40 && code <= 47) {
-      current_attributes.background = parse_color_code(code - 10);
-    } else if (code >= 90 && code <= 97) {
-      current_attributes.foreground = parse_color_code(code);
-    } else if (code >= 100 && code <= 107) {
-      current_attributes.background = parse_color_code(code - 10);
-    }
-    break;
-  }
+// Stubs for deprecated/unused methods
+std::vector<ParsedLine>
+TerminalParser::parse_output(const std::string &output) {
+  return {};
 }
+std::string TerminalParser::strip_escape_sequences(const std::string &text) {
+  return text;
+}
+TerminalAttributes
+TerminalParser::parse_escape_sequence(const std::string &escape_seq) {
+  return {};
+}
+bool TerminalParser::is_prompt(const std::string &line) { return false; }
+bool TerminalParser::is_command_output(const std::string &line) {
+  return false;
+}
+bool TerminalParser::is_error_output(const std::string &line) { return false; }
+void TerminalParser::erase_in_line(int mode) {}
+void TerminalParser::erase_in_display(int mode) {}
+void TerminalParser::move_cursor(int row, int col) {}

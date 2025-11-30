@@ -30,15 +30,27 @@ unsigned int get_next_codepoint(const std::string &s, size_t &pos) {
     codepoint = first_byte;
     pos += 1;
   } else if ((first_byte & 0xE0) == 0xC0) {
+    if (pos + 1 >= s.length()) {
+      pos += 1;
+      return 0xFFFD;
+    } // Truncated
     codepoint = (first_byte & 0x1F) << 6;
     codepoint |= (s[pos + 1] & 0x3F);
     pos += 2;
   } else if ((first_byte & 0xF0) == 0xE0) {
+    if (pos + 2 >= s.length()) {
+      pos += 1;
+      return 0xFFFD;
+    } // Truncated
     codepoint = (first_byte & 0x0F) << 12;
     codepoint |= (s[pos + 1] & 0x3F) << 6;
     codepoint |= (s[pos + 2] & 0x3F);
     pos += 3;
   } else if ((first_byte & 0xF8) == 0xF0) {
+    if (pos + 3 >= s.length()) {
+      pos += 1;
+      return 0xFFFD;
+    } // Truncated
     codepoint = (first_byte & 0x07) << 18;
     codepoint |= (s[pos + 1] & 0x3F) << 12;
     codepoint |= (s[pos + 2] & 0x3F) << 6;

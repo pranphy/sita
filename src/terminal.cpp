@@ -136,48 +136,54 @@ void Terminal::show_buffer() {
   cursor_pos = {25.0f, start_y};
 
   if (text_renderer) {
-    // Determine how many lines we can show
-    // We want to show the last N lines of parsed_buffer + active_raw_line
+    if (alternate_screen_active) {
+      // Render screen buffer
+      float y = win_height - 50.0f;
+      for (const auto &row : screen_buffer) {
+        float x = 25.0f;
+        for (const auto &cell : row) {
+          float color[4];
+          get_color_for_attributes(cell.attributes, color);
+          auto pos = text_renderer->render_text_harfbuzz(
+              cell.content, {x, y}, 1.0f, color, win_width, win_height);
+          x = pos.x;
+        }
+        y -= 50.0f;
+      }
+      // Update cursor pos for rendering
+      cursor_pos.x = 25.0f + screen_cursor_col * 15.0f; // Approx
+      cursor_pos.y = win_height - 50.0f - screen_cursor_row * 50.0f;
+    } else {
+      // Determine how many lines we can show
+      // We want to show the last N lines of parsed_buffer + active_line
 
-    // First, parse active_raw_line to see how many lines it takes
-    std::vector<ParsedLine> active_parsed;
-    if (!active_raw_line.empty()) {
-      active_parsed = parser.parse_output(active_raw_line);
-      for (const auto &line : active_parsed) {
-        if (line.clear_screen) {
-          parsed_buffer.clear();
-          scroll_offset = 0;
+      // active_line is just ONE line (since NEWLINE pushes to parsed_buffer)
+      size_t total_lines = parsed_buffer.size() + 1;
+      size_t max_lines = (win_height / 50.0f) - 1; // Approximate
+
+      // Clamp scroll_offset
+      if (scroll_offset > (int)total_lines - (int)max_lines) {
+        scroll_offset = (int)total_lines - (int)max_lines;
+      }
+      if (scroll_offset < 0)
+        scroll_offset = 0;
+
+      size_t start_index = 0;
+      if (total_lines > max_lines) {
+        start_index = total_lines - max_lines - scroll_offset;
+      }
+
+      // Render parsed_buffer lines
+      for (size_t i = 0; i < parsed_buffer.size(); ++i) {
+        if (i >= start_index && i < start_index + max_lines) {
+          render_line(parsed_buffer[i], start_y);
         }
       }
-    }
 
-    size_t total_lines = parsed_buffer.size() + active_parsed.size();
-    size_t max_lines = (win_height / 50.0f) - 1; // Approximate
-
-    // Clamp scroll_offset
-    if (scroll_offset > (int)total_lines - (int)max_lines) {
-      scroll_offset = (int)total_lines - (int)max_lines;
-    }
-    if (scroll_offset < 0)
-      scroll_offset = 0;
-
-    size_t start_index = 0;
-    if (total_lines > max_lines) {
-      start_index = total_lines - max_lines - scroll_offset;
-    }
-
-    // Render parsed_buffer lines
-    for (size_t i = 0; i < parsed_buffer.size(); ++i) {
-      if (i >= start_index && i < start_index + max_lines) {
-        render_line(parsed_buffer[i], start_y);
-      }
-    }
-
-    // Render active_raw_line lines
-    for (size_t i = 0; i < active_parsed.size(); ++i) {
-      if (parsed_buffer.size() + i >= start_index &&
-          parsed_buffer.size() + i < start_index + max_lines) {
-        render_line(active_parsed[i], start_y);
+      // Render active_line
+      if (parsed_buffer.size() >= start_index &&
+          parsed_buffer.size() < start_index + max_lines) {
+        render_line(active_line, start_y);
       }
     }
   }
@@ -250,35 +256,228 @@ void Terminal::key_pressed(char c, int /*type*/) {
 std::string Terminal::poll_output() {
   auto result = term.handle_pty_output();
   if (!result.empty()) {
-    // Append new output to the active raw line
-    active_raw_line += result;
+    auto actions = parser.parse_input(result);
 
-    // Check for newlines to commit complete lines
-    size_t last_nl = active_raw_line.rfind('\n');
-    if (last_nl != std::string::npos) {
-      std::string complete_chunk =
-          active_raw_line.substr(0, last_nl); // Up to last \n
-      std::string remainder = active_raw_line.substr(last_nl + 1);
+    for (const auto &action : actions) {
+      if (action.type == ActionType::SET_ALTERNATE_BUFFER) {
+        alternate_screen_active = action.flag;
+        if (alternate_screen_active) {
+          // Initialize screen buffer if needed
+          screen_rows = (int)(win_height / 50.0f);
+          screen_cols = (int)(win_width / 15.0f); // Approx char width
+          if (screen_buffer.empty() ||
+              screen_buffer.size() != (size_t)screen_rows) {
+            screen_buffer.resize(screen_rows);
+            for (auto &row : screen_buffer)
+              row.resize(screen_cols, Cell{" ", {}});
+          }
+          screen_cursor_row = 0;
+          screen_cursor_col = 0;
+        }
+      } else if (alternate_screen_active) {
+        // Handle actions in screen mode
+        if (action.type == ActionType::PRINT_TEXT) {
+          for (char c : action.text) {
+            if (screen_cursor_row < screen_rows &&
+                screen_cursor_col < screen_cols) {
+              screen_buffer[screen_cursor_row][screen_cursor_col] =
+                  Cell{std::string(1, c), action.attributes};
+              screen_cursor_col++;
+              if (screen_cursor_col >= screen_cols) {
+                screen_cursor_col = 0;
+                screen_cursor_row++;
+              }
+            }
+          }
+        } else if (action.type == ActionType::NEWLINE) {
+          screen_cursor_row++;
+          int bottom = (scroll_region_bottom == -1) ? screen_rows - 1
+                                                    : scroll_region_bottom;
+          int top = scroll_region_top;
 
-      // Parse complete chunk
-      // Note: parse_output splits by newline, so it handles multiple lines in
-      // complete_chunk
-      auto complete_parsed = parser.parse_output(complete_chunk);
+          // Ensure bounds
+          if (bottom >= (int)screen_buffer.size())
+            bottom = (int)screen_buffer.size() - 1;
+          if (top < 0)
+            top = 0;
+          if (top > bottom)
+            top = bottom;
 
-      // Append to parsed_buffer
-      for (const auto &line : complete_parsed) {
-        if (line.clear_screen) {
+          if (screen_cursor_row > bottom) {
+            // Scroll up within region
+            screen_cursor_row = bottom;
+            if (top < (int)screen_buffer.size() &&
+                bottom < (int)screen_buffer.size()) {
+              screen_buffer.erase(screen_buffer.begin() + top);
+              screen_buffer.insert(
+                  screen_buffer.begin() + bottom,
+                  std::vector<Cell>(screen_cols, Cell{" ", {}}));
+            }
+          }
+        } else if (action.type == ActionType::CARRIAGE_RETURN) {
+          screen_cursor_col = 0;
+        } else if (action.type == ActionType::BACKSPACE) {
+          if (screen_cursor_col > 0)
+            screen_cursor_col--;
+        } else if (action.type == ActionType::MOVE_CURSOR) {
+          if (action.flag) { // Absolute position (1-based)
+            screen_cursor_row = action.row - 1;
+            screen_cursor_col = action.col - 1;
+          } else { // Relative
+            screen_cursor_row += action.row;
+            screen_cursor_col += action.col;
+          }
+          // Clamp
+          if (screen_cursor_row < 0)
+            screen_cursor_row = 0;
+          if (screen_cursor_row >= screen_rows)
+            screen_cursor_row = screen_rows - 1;
+          if (screen_cursor_col < 0)
+            screen_cursor_col = 0;
+          if (screen_cursor_col >= screen_cols)
+            screen_cursor_col = screen_cols - 1;
+        } else if (action.type == ActionType::CLEAR_SCREEN) {
+          for (auto &row : screen_buffer)
+            std::fill(row.begin(), row.end(), Cell{" ", {}});
+          screen_cursor_row = 0;
+          screen_cursor_col = 0;
+        } else if (action.type == ActionType::CLEAR_LINE) {
+          if (screen_cursor_row < (int)screen_buffer.size()) {
+            // Clear from cursor to end of line
+            auto &row = screen_buffer[screen_cursor_row];
+            for (int i = screen_cursor_col; i < (int)row.size(); ++i) {
+              row[i] = Cell{" ", {}};
+            }
+          }
+        } else if (action.type == ActionType::INSERT_LINE) {
+          int bottom = (scroll_region_bottom == -1) ? screen_rows - 1
+                                                    : scroll_region_bottom;
+          int top = scroll_region_top;
+
+          if (bottom >= (int)screen_buffer.size())
+            bottom = (int)screen_buffer.size() - 1;
+          if (top < 0)
+            top = 0;
+
+          // IL only works if cursor is within scrolling region
+          if (screen_cursor_row >= top && screen_cursor_row <= bottom) {
+            for (int i = 0; i < action.row; ++i) {
+              if (bottom < (int)screen_buffer.size()) {
+                screen_buffer.erase(screen_buffer.begin() + bottom);
+                screen_buffer.insert(
+                    screen_buffer.begin() + screen_cursor_row,
+                    std::vector<Cell>(screen_cols, Cell{" ", {}}));
+              }
+            }
+          }
+        } else if (action.type == ActionType::DELETE_LINE) {
+          int bottom = (scroll_region_bottom == -1) ? screen_rows - 1
+                                                    : scroll_region_bottom;
+          int top = scroll_region_top;
+
+          if (bottom >= (int)screen_buffer.size())
+            bottom = (int)screen_buffer.size() - 1;
+          if (top < 0)
+            top = 0;
+
+          if (screen_cursor_row >= top && screen_cursor_row <= bottom) {
+            for (int i = 0; i < action.row; ++i) {
+              if (screen_cursor_row < (int)screen_buffer.size()) {
+                screen_buffer.erase(screen_buffer.begin() + screen_cursor_row);
+                screen_buffer.insert(
+                    screen_buffer.begin() + bottom,
+                    std::vector<Cell>(screen_cols, Cell{" ", {}}));
+              }
+            }
+          }
+        } else if (action.type == ActionType::INSERT_CHAR) {
+          if (screen_cursor_row < (int)screen_buffer.size()) {
+            auto &row = screen_buffer[screen_cursor_row];
+            for (int i = 0; i < action.row; ++i) {
+              if (screen_cursor_col <=
+                  (int)row.size()) { // Allow inserting at end
+                row.insert(row.begin() + screen_cursor_col, Cell{" ", {}});
+                if (row.size() > (size_t)screen_cols) {
+                  row.pop_back();
+                }
+              }
+            }
+          }
+        } else if (action.type == ActionType::DELETE_CHAR) {
+          if (screen_cursor_row < (int)screen_buffer.size()) {
+            auto &row = screen_buffer[screen_cursor_row];
+            for (int i = 0; i < action.row; ++i) {
+              if (screen_cursor_col < (int)row.size()) {
+                row.erase(row.begin() + screen_cursor_col);
+                row.push_back(Cell{" ", {}});
+              }
+            }
+          }
+        } else if (action.type == ActionType::SET_SCROLL_REGION) {
+          scroll_region_top = action.row - 1;
+          scroll_region_bottom = action.col - 1;
+          if (scroll_region_top < 0)
+            scroll_region_top = 0;
+          if (scroll_region_bottom < 0)
+            scroll_region_bottom = -1;
+          screen_cursor_row = 0; // Usually resets cursor to home
+          screen_cursor_col = 0;
+        } else if (action.type == ActionType::REPORT_CURSOR_POSITION) {
+          std::string response = "\033[" +
+                                 std::to_string(screen_cursor_row + 1) + ";" +
+                                 std::to_string(screen_cursor_col + 1) + "R";
+          send_input(response);
+        } else if (action.type == ActionType::REPORT_DEVICE_STATUS) {
+          send_input("\033[0n");
+        }
+      } else {
+        // Normal mode (History)
+        if (action.type == ActionType::PRINT_TEXT) {
+          if (active_line.segments.empty()) {
+            active_line.segments.push_back({action.text, action.attributes});
+          } else {
+            auto &last = active_line.segments.back();
+            // Compare attributes (simple comparison)
+            bool same_attrs =
+                (last.attributes.foreground == action.attributes.foreground &&
+                 last.attributes.background == action.attributes.background &&
+                 last.attributes.bold ==
+                     action.attributes.bold); // Add others if needed
+            if (same_attrs) {
+              last.content += action.text;
+            } else {
+              active_line.segments.push_back({action.text, action.attributes});
+            }
+          }
+        } else if (action.type == ActionType::NEWLINE) {
+          // Push current line to history
+          parsed_buffer.push_back(active_line);
+          active_line = ParsedLine(); // Reset
+          scroll_offset = 0;
+        } else if (action.type == ActionType::CLEAR_SCREEN) {
           parsed_buffer.clear();
           scroll_offset = 0;
+          active_line = ParsedLine();
+        } else if (action.type == ActionType::CARRIAGE_RETURN) {
+          // For now, ignore or maybe we should clear line?
+          // In simple terminal, CR just moves cursor to start.
+          // But we are appending.
+          // If we want to support overwrite, we need a cursor index in
+          // active_line. For now, let's just append \r if we were storing raw
+          // string, but here we are storing segments. Let's ignore CR for now
+          // as it complicates append-only model.
+        } else if (action.type == ActionType::BACKSPACE) {
+          if (!active_line.segments.empty()) {
+            auto &last = active_line.segments.back();
+            if (!last.content.empty()) {
+              last.content.pop_back();
+              if (last.content.empty()) {
+                active_line.segments.pop_back();
+              }
+            }
+          }
         }
-        parsed_buffer.push_back(line);
       }
-
-      // Update active_raw_line to be the remainder
-      active_raw_line = remainder;
-
-      // Auto-scroll to bottom to keep prompt visible
-      scroll_offset = 0;
     }
   }
   return result;
