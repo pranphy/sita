@@ -51,6 +51,8 @@ void TerminalParser::process_char(char c,
       actions.push_back({ActionType::CARRIAGE_RETURN});
     } else if (c == '\b') {
       actions.push_back({ActionType::BACKSPACE});
+    } else if (c == '\t') {
+      actions.push_back({ActionType::TAB});
     } else if ((unsigned char)c >= 32) {
       actions.push_back(
           {ActionType::PRINT_TEXT, std::string(1, c), current_attributes});
@@ -121,13 +123,14 @@ void TerminalParser::handle_csi(char c, std::vector<TerminalAction> &actions) {
     case 'J': // ED - Erase in Display
     {
       int mode = csi_args.empty() ? 0 : csi_args[0];
-      if (mode == 2 || mode == 3) {
-        actions.push_back({ActionType::CLEAR_SCREEN});
-      }
+      actions.push_back(
+          {ActionType::CLEAR_SCREEN, "", current_attributes, mode});
     } break;
     case 'K': // EL - Erase in Line
-      actions.push_back({ActionType::CLEAR_LINE});
-      break;
+    {
+      int mode = csi_args.empty() ? 0 : csi_args[0];
+      actions.push_back({ActionType::CLEAR_LINE, "", current_attributes, mode});
+    } break;
     case 'A': // CUU - Cursor Up
     {
       int n = csi_args.empty() ? 1 : csi_args[0];
@@ -166,6 +169,10 @@ void TerminalParser::handle_csi(char c, std::vector<TerminalAction> &actions) {
           actions.push_back(
               {ActionType::SET_ALTERNATE_BUFFER, "", {}, 0, 0, true});
         }
+      } else {
+        if (csi_args.size() > 0 && csi_args[0] == 4) {
+          actions.push_back({ActionType::SET_INSERT_MODE, "", {}, 0, 0, true});
+        }
       }
       break;
     case 'l': // RM - Reset Mode
@@ -174,27 +181,31 @@ void TerminalParser::handle_csi(char c, std::vector<TerminalAction> &actions) {
           actions.push_back(
               {ActionType::SET_ALTERNATE_BUFFER, "", {}, 0, 0, false});
         }
+      } else {
+        if (csi_args.size() > 0 && csi_args[0] == 4) {
+          actions.push_back({ActionType::SET_INSERT_MODE, "", {}, 0, 0, false});
+        }
       }
       break;
     case 'L': // IL - Insert Line
     {
       int n = csi_args.empty() ? 1 : csi_args[0];
-      actions.push_back({ActionType::INSERT_LINE, "", {}, n});
+      actions.push_back({ActionType::INSERT_LINE, "", current_attributes, n});
     } break;
     case 'M': // DL - Delete Line
     {
       int n = csi_args.empty() ? 1 : csi_args[0];
-      actions.push_back({ActionType::DELETE_LINE, "", {}, n});
+      actions.push_back({ActionType::DELETE_LINE, "", current_attributes, n});
     } break;
     case '@': // ICH - Insert Character
     {
       int n = csi_args.empty() ? 1 : csi_args[0];
-      actions.push_back({ActionType::INSERT_CHAR, "", {}, n});
+      actions.push_back({ActionType::INSERT_CHAR, "", current_attributes, n});
     } break;
     case 'P': // DCH - Delete Character
     {
       int n = csi_args.empty() ? 1 : csi_args[0];
-      actions.push_back({ActionType::DELETE_CHAR, "", {}, n});
+      actions.push_back({ActionType::DELETE_CHAR, "", current_attributes, n});
     } break;
     case 'r': // DECSTBM - Set Scrolling Region
     {
@@ -210,6 +221,11 @@ void TerminalParser::handle_csi(char c, std::vector<TerminalAction> &actions) {
       } else if (arg == 5) {
         actions.push_back({ActionType::REPORT_DEVICE_STATUS});
       }
+    } break;
+    case 'X': // ECH - Erase Character
+    {
+      int n = csi_args.empty() ? 1 : csi_args[0];
+      actions.push_back({ActionType::ERASE_CHAR, "", current_attributes, n});
     } break;
     }
     state = State::NORMAL;
@@ -235,14 +251,29 @@ void TerminalParser::update_attributes(const std::vector<int> &params) {
     int code = params[i];
     if (code == 38 || code == 48) {
       // Extended color
+      bool is_fg = (code == 38);
       if (i + 1 < params.size()) {
         int mode = params[i + 1];
         if (mode == 5) { // 256 color
           if (i + 2 < params.size()) {
+            int color_idx = params[i + 2];
+            TerminalColor &color = is_fg ? current_attributes.foreground
+                                         : current_attributes.background;
+            color.type = TerminalColor::Type::INDEXED;
+            color.indexed_color = static_cast<uint8_t>(color_idx);
             i += 2;
           }
         } else if (mode == 2) { // TrueColor
           if (i + 4 < params.size()) {
+            int r = params[i + 2];
+            int g = params[i + 3];
+            int b = params[i + 4];
+            TerminalColor &color = is_fg ? current_attributes.foreground
+                                         : current_attributes.background;
+            color.type = TerminalColor::Type::RGB;
+            color.r = static_cast<uint8_t>(r);
+            color.g = static_cast<uint8_t>(g);
+            color.b = static_cast<uint8_t>(b);
             i += 4;
           }
         }
@@ -278,13 +309,21 @@ void TerminalParser::update_attributes_from_code(int code) {
     break;
   default:
     if (code >= 30 && code <= 37) {
-      current_attributes.foreground = parse_color_code(code);
+      current_attributes.foreground.type = TerminalColor::Type::ANSI;
+      current_attributes.foreground.ansi_color = parse_color_code(code);
     } else if (code >= 40 && code <= 47) {
-      current_attributes.background = parse_color_code(code - 10);
+      current_attributes.background.type = TerminalColor::Type::ANSI;
+      current_attributes.background.ansi_color = parse_color_code(code - 10);
     } else if (code >= 90 && code <= 97) {
-      current_attributes.foreground = parse_color_code(code);
+      current_attributes.foreground.type = TerminalColor::Type::ANSI;
+      current_attributes.foreground.ansi_color = parse_color_code(code);
     } else if (code >= 100 && code <= 107) {
-      current_attributes.background = parse_color_code(code - 10);
+      current_attributes.background.type = TerminalColor::Type::ANSI;
+      current_attributes.background.ansi_color = parse_color_code(code - 10);
+    } else if (code == 39) {                           // Reset FG
+      current_attributes.foreground = TerminalColor{}; // Default
+    } else if (code == 49) {                           // Reset BG
+      current_attributes.background = TerminalColor{}; // Default
     }
     break;
   }

@@ -32,7 +32,7 @@ Terminal::Terminal(int width, int height)
 
   win_width = width;
   win_height = height;
-  cursor_pos = {25.0f, height - 50.0f};
+  cursor_pos = {25.0f, height - LINE_HEIGHT};
 
   text_renderer = nullptr;
 }
@@ -41,7 +41,20 @@ void Terminal::set_window_size(float width, float height) {
   win_width = width;
   win_height = height;
 
-  cursor_pos = {25.0f, height - 50.0f};
+  screen_rows = (int)(height / LINE_HEIGHT);
+  screen_cols = (int)(width / CELL_WIDTH);
+  term.set_window_size(screen_rows, screen_cols);
+
+  cursor_pos = {25.0f, height - LINE_HEIGHT};
+
+  // Resize screen buffer if active (or just always to be safe/ready)
+  // We need to ensure it matches screen_rows/cols to avoid out of bounds access
+  // when shell sends cursor movements for the new size.
+  screen_buffer.resize(screen_rows);
+  for (auto &row : screen_buffer) {
+    row.resize(screen_cols, Cell{" ", {}});
+  }
+
   // std::println("Changed sized of terminal to {}x{}", width, height);
 }
 
@@ -62,12 +75,12 @@ void Terminal::scroll_down() {
 }
 
 void Terminal::scroll_page_up() {
-  int lines_per_page = (win_height / 50.0f) - 1;
+  int lines_per_page = (win_height / LINE_HEIGHT) - 1;
   scroll_offset += lines_per_page;
 }
 
 void Terminal::scroll_page_down() {
-  int lines_per_page = (win_height / 50.0f) - 1;
+  int lines_per_page = (win_height / LINE_HEIGHT) - 1;
   scroll_offset -= lines_per_page;
   if (scroll_offset < 0)
     scroll_offset = 0;
@@ -81,130 +94,278 @@ Terminal::~Terminal() {
 }
 
 void Terminal::render_line(const ParsedLine &line, float &y_pos) {
-  float current_x = 25.0f;
-  float margin = 25.0f;
+  float start_x = 25.0f;
+  int col_index = 0;
 
   // Render each segment of the line with its own attributes
   for (const auto &segment : line.segments) {
+    // Visual FG
     float color[4];
-    get_color_for_attributes(segment.attributes, color);
+    if (segment.attributes.reverse) {
+      get_color(segment.attributes.background, color,
+                true); // Use BG definition
+    } else {
+      get_color_for_attributes(segment.attributes,
+                               color); // Normal FG (handles Bold)
+    }
 
-    // Split segment into words to handle wrapping
-    // We use split_by_devanagari which returns chunks of text (words or script
-    // runs)
+    // Visual BG
+    float bg_color[4];
+    if (segment.attributes.reverse) {
+      get_color(segment.attributes.foreground, bg_color,
+                false); // Use FG definition
+    } else {
+      get_color(segment.attributes.background, bg_color, true); // Normal BG
+    }
+
+    // Split segment into words/chunks
     for (auto &chunk : utl::split_by_devanagari(segment.content)) {
-      // Further split by space to ensure word wrapping works for long lines
-      for (auto &word : utl::split_by_space(chunk)) {
-        float word_width = text_renderer->measure_text_width(word, 1.0f);
+      // Let's iterate codepoints to track col_index.
+      size_t pos = 0;
+      std::string current_run;
+      int run_start_col = col_index;
 
-        // Check if word fits in current line
-        // If it's a space, we might not want to wrap just for it, but let's
-        // keep it simple
-        if (current_x + word_width > win_width - margin) {
-          // Move to next line
-          y_pos -= 50.0f;
-          current_x = margin;
-          cursor_pos.y = y_pos;
+      while (pos < chunk.length()) {
+        size_t prev_pos = pos;
+        unsigned int cp = utl::get_next_codepoint(chunk, pos);
+        (void)cp; // Suppress unused variable warning
+        std::string char_str = chunk.substr(prev_pos, pos - prev_pos);
 
-          // If the word is a space and we just wrapped, we might want to skip
-          // it to avoid leading spaces on new lines. But for now, let's render
-          // it. Actually, standard behavior is usually to eat the space if it
-          // causes a wrap.
-          if (word == " ") {
-            continue;
+        if (col_index >= screen_cols) {
+          // Flush current run
+          if (!current_run.empty()) {
+            float x = start_x + run_start_col * CELL_WIDTH;
+            (void)x; // Suppress unused variable warning
+            float w = (col_index - run_start_col) * CELL_WIDTH;
+            float baseline_offset = LINE_HEIGHT * 0.25f;
+            text_renderer->draw_solid_rectangle(
+                x, y_pos, w, LINE_HEIGHT, bg_color, win_width, win_height);
+            text_renderer->render_text_harfbuzz(
+                current_run, {x, y_pos + baseline_offset}, 1.0f, color,
+                win_width, win_height);
+            current_run.clear();
           }
+
+          y_pos -= LINE_HEIGHT;
+          col_index = 0;
+          run_start_col = 0;
         }
 
-        cursor_pos.x = current_x;
-        cursor_pos = text_renderer->render_text_harfbuzz(
-            word, cursor_pos, 1.0f, color, win_width, win_height);
+        current_run += char_str;
+        col_index++;
+      }
 
-        // Update current_x based on where render_text left off
-        current_x = cursor_pos.x;
+      // Flush remaining
+      if (!current_run.empty()) {
+        float x = start_x + run_start_col * CELL_WIDTH;
+        float w = (col_index - run_start_col) * CELL_WIDTH;
+        float baseline_offset = LINE_HEIGHT * 0.25f;
+        text_renderer->draw_solid_rectangle(x, y_pos, w, LINE_HEIGHT, bg_color,
+                                            win_width, win_height);
+        text_renderer->render_text_harfbuzz(current_run,
+                                            {x, y_pos + baseline_offset}, 1.0f,
+                                            color, win_width, win_height);
       }
     }
   }
   // Move to the next line (hard wrap for the end of the line)
-  y_pos -= 50.0f;
+  y_pos -= LINE_HEIGHT;
   cursor_pos.y = y_pos;
   cursor_pos.x = 25.0f;
 }
 
 void Terminal::show_buffer() {
   glClear(GL_COLOR_BUFFER_BIT);
-  float start_y = win_height - 50.0f;
+  float start_y = win_height - LINE_HEIGHT;
   cursor_pos = {25.0f, start_y};
 
   if (text_renderer) {
     if (alternate_screen_active) {
       // Render screen buffer
-      float y = win_height - 50.0f;
+      float y = win_height - LINE_HEIGHT;
       for (const auto &row : screen_buffer) {
-        float x = 25.0f;
         // Group contiguous cells with same attributes
         if (row.empty()) {
-          y -= 50.0f;
+          y -= LINE_HEIGHT;
           continue;
         }
 
         std::string current_segment_text;
         TerminalAttributes current_attrs = row[0].attributes;
+        int segment_start_col = 0;
 
         for (size_t i = 0; i < row.size(); ++i) {
           const auto &cell = row[i];
           // Check if attributes match (simple check)
           bool attrs_match =
-              (cell.attributes.foreground == current_attrs.foreground &&
-               cell.attributes.background == current_attrs.background &&
+              (cell.attributes.foreground.type ==
+                   current_attrs.foreground.type &&
+               (cell.attributes.foreground.type != TerminalColor::Type::ANSI ||
+                cell.attributes.foreground.ansi_color ==
+                    current_attrs.foreground.ansi_color) &&
+               (cell.attributes.foreground.type !=
+                    TerminalColor::Type::INDEXED ||
+                cell.attributes.foreground.indexed_color ==
+                    current_attrs.foreground.indexed_color) &&
+               (cell.attributes.foreground.type != TerminalColor::Type::RGB ||
+                (cell.attributes.foreground.r == current_attrs.foreground.r &&
+                 cell.attributes.foreground.g == current_attrs.foreground.g &&
+                 cell.attributes.foreground.b == current_attrs.foreground.b)) &&
+
+               cell.attributes.background.type ==
+                   current_attrs.background.type &&
+               (cell.attributes.background.type != TerminalColor::Type::ANSI ||
+                cell.attributes.background.ansi_color ==
+                    current_attrs.background.ansi_color) &&
+               (cell.attributes.background.type !=
+                    TerminalColor::Type::INDEXED ||
+                cell.attributes.background.indexed_color ==
+                    current_attrs.background.indexed_color) &&
+               (cell.attributes.background.type != TerminalColor::Type::RGB ||
+                (cell.attributes.background.r == current_attrs.background.r &&
+                 cell.attributes.background.g == current_attrs.background.g &&
+                 cell.attributes.background.b == current_attrs.background.b)) &&
+
                cell.attributes.bold == current_attrs.bold &&
                cell.attributes.italic == current_attrs.italic &&
                cell.attributes.underline == current_attrs.underline &&
-               cell.attributes.reverse == current_attrs.reverse);
+               cell.attributes.blink == current_attrs.blink &&
+               cell.attributes.reverse == current_attrs.reverse &&
+               cell.attributes.strikethrough == current_attrs.strikethrough);
 
           if (attrs_match) {
             current_segment_text += cell.content;
           } else {
             // Render previous segment
             if (!current_segment_text.empty()) {
-              float color[4];
-              get_color_for_attributes(current_attrs, color);
+
+              // Calculate x based on start column to enforce grid alignment
+              float current_x = 25.0f + segment_start_col * CELL_WIDTH;
+
+              // Render background rectangle
+              glDisable(GL_TEXTURE_2D);
+              float bg_color[4];
+              if (current_attrs.reverse) {
+                get_color(current_attrs.foreground, bg_color,
+                          true); // Use FG as BG
+              } else {
+                get_color(current_attrs.background, bg_color,
+                          true); // Normal BG
+              }
+
+              float bg_w = (i - segment_start_col) * CELL_WIDTH;
+              float bg_h = LINE_HEIGHT;
+
+              text_renderer->draw_solid_rectangle(
+                  current_x, y, bg_w, bg_h, bg_color, win_width, win_height);
+
+              // Get FG color
+              float fg_color[4];
+              if (current_attrs.reverse) {
+                get_color(current_attrs.background, fg_color,
+                          false); // Use BG as FG
+              } else {
+                get_color_for_attributes(current_attrs,
+                                         fg_color); // Normal FG (handles bold)
+              }
 
               // Split by script to ensure correct font selection
+              float baseline_offset =
+                  LINE_HEIGHT * 0.25f; // Lift text up from bottom
               for (const auto &chunk :
                    utl::split_by_devanagari(current_segment_text)) {
-                auto pos = text_renderer->render_text_harfbuzz(
-                    chunk, {x, y}, 1.0f, color, win_width, win_height);
-                x = pos.x;
+                size_t temp_pos = 0;
+                unsigned int first_cp =
+                    utl::get_next_codepoint(chunk, temp_pos);
+                if (utl::is_devanagari(first_cp)) {
+                  // Devanagari: Render as chunk (trust HarfBuzz for complex
+                  // script)
+                  auto pos = text_renderer->render_text_harfbuzz(
+                      chunk, {current_x, y + baseline_offset}, 1.0f, fg_color,
+                      win_width, win_height);
+                  current_x = pos.x;
+                } else {
+                  // ASCII/Latin: Render char by char to enforce grid alignment
+                  size_t pos = 0;
+                  while (pos < chunk.length()) {
+                    size_t prev_pos = pos;
+                    utl::get_next_codepoint(chunk, pos);
+                    std::string char_str =
+                        chunk.substr(prev_pos, pos - prev_pos);
+                    text_renderer->render_text_harfbuzz(
+                        char_str, {current_x, y + baseline_offset}, 1.0f,
+                        fg_color, win_width, win_height);
+                    current_x += CELL_WIDTH;
+                  }
+                }
               }
             }
             // Start new segment
             current_segment_text = cell.content;
             current_attrs = cell.attributes;
+            segment_start_col = i;
           }
         }
         // Render last segment
         if (!current_segment_text.empty()) {
-          float color[4];
-          get_color_for_attributes(current_attrs, color);
+          float current_x = 25.0f + segment_start_col * CELL_WIDTH;
+
+          float bg_color[4];
+          if (current_attrs.reverse) {
+            get_color(current_attrs.foreground, bg_color, true);
+          } else {
+            get_color(current_attrs.background, bg_color, true);
+          }
+
+          float bg_w =
+              (row.size() - segment_start_col) * CELL_WIDTH; // Approximation
+          float bg_h = LINE_HEIGHT;
+          text_renderer->draw_solid_rectangle(current_x, y, bg_w, bg_h,
+                                              bg_color, win_width, win_height);
+
+          float fg_color[4];
+          if (current_attrs.reverse) {
+            get_color(current_attrs.background, fg_color, false);
+          } else {
+            get_color_for_attributes(current_attrs, fg_color);
+          }
+
           for (const auto &chunk :
                utl::split_by_devanagari(current_segment_text)) {
-            auto pos = text_renderer->render_text_harfbuzz(
-                chunk, {x, y}, 1.0f, color, win_width, win_height);
-            x = pos.x;
+            float baseline_offset = LINE_HEIGHT * 0.25f;
+            size_t temp_pos = 0;
+            unsigned int first_cp = utl::get_next_codepoint(chunk, temp_pos);
+            if (utl::is_devanagari(first_cp)) {
+              auto pos = text_renderer->render_text_harfbuzz(
+                  chunk, {current_x, y + baseline_offset}, 1.0f, fg_color,
+                  win_width, win_height);
+              current_x = pos.x;
+            } else {
+              size_t pos = 0;
+              while (pos < chunk.length()) {
+                size_t prev_pos = pos;
+                utl::get_next_codepoint(chunk, pos);
+                std::string char_str = chunk.substr(prev_pos, pos - prev_pos);
+                text_renderer->render_text_harfbuzz(
+                    char_str, {current_x, y + baseline_offset}, 1.0f, fg_color,
+                    win_width, win_height);
+                current_x += CELL_WIDTH;
+              }
+            }
           }
         }
-        y -= 50.0f;
+        y -= LINE_HEIGHT;
       }
       // Update cursor pos for rendering
-      cursor_pos.x = 25.0f + screen_cursor_col * 15.0f; // Approx
-      cursor_pos.y = win_height - 50.0f - screen_cursor_row * 50.0f;
+      cursor_pos.x = 25.0f + screen_cursor_col * CELL_WIDTH; // Approx
+      cursor_pos.y = win_height - LINE_HEIGHT - screen_cursor_row * LINE_HEIGHT;
     } else {
       // Determine how many lines we can show
       // We want to show the last N lines of parsed_buffer + active_line
 
       // active_line is just ONE line (since NEWLINE pushes to parsed_buffer)
       size_t total_lines = parsed_buffer.size() + 1;
-      size_t max_lines = (win_height / 50.0f) - 1; // Approximate
+      size_t max_lines = (win_height / LINE_HEIGHT) - 1; // Approximate
 
       // Clamp scroll_offset
       if (scroll_offset > (int)total_lines - (int)max_lines) {
@@ -283,6 +444,24 @@ void Terminal::update_cursor_blink() {
 
 void Terminal::set_renderer(TextRenderer *renderer) {
   text_renderer = renderer;
+  update_dimensions();
+}
+
+void Terminal::update_dimensions() {
+  if (text_renderer) {
+    CELL_WIDTH = text_renderer->get_char_width();
+    LINE_HEIGHT = text_renderer->get_line_height();
+
+    if (CELL_WIDTH < 1.0f)
+      CELL_WIDTH = 15.0f; // Fallback
+
+    std::println("Updated dimensions: CELL_WIDTH={}, LINE_HEIGHT={}",
+                 CELL_WIDTH, LINE_HEIGHT);
+
+    // Recalculate screen size
+    set_window_size(win_width, win_height);
+    std::println("Screen size: {} rows, {} cols", screen_rows, screen_cols);
+  }
 }
 
 void Terminal::send_input(const std::string &input) {
@@ -308,8 +487,8 @@ std::string Terminal::poll_output() {
         alternate_screen_active = action.flag;
         if (alternate_screen_active) {
           // Initialize screen buffer if needed
-          screen_rows = (int)(win_height / 50.0f);
-          screen_cols = (int)(win_width / 15.0f); // Approx char width
+          screen_rows = (int)(win_height / LINE_HEIGHT);
+          screen_cols = (int)(win_width / CELL_WIDTH); // Approx char width
           if (screen_buffer.empty() ||
               screen_buffer.size() != (size_t)screen_rows) {
             screen_buffer.resize(screen_rows);
@@ -319,6 +498,8 @@ std::string Terminal::poll_output() {
           screen_cursor_row = 0;
           screen_cursor_col = 0;
         }
+      } else if (action.type == ActionType::SET_INSERT_MODE) {
+        insert_mode = action.flag;
       } else if (alternate_screen_active) {
         // Handle actions in screen mode
         if (action.type == ActionType::PRINT_TEXT) {
@@ -359,8 +540,27 @@ std::string Terminal::poll_output() {
 
             if (screen_cursor_row < screen_rows &&
                 screen_cursor_col < screen_cols) {
-              screen_buffer[screen_cursor_row][screen_cursor_col] =
-                  Cell{char_str, action.attributes};
+              if (insert_mode) {
+                // Insert mode: shift characters right
+                if (screen_cursor_row < (int)screen_buffer.size()) {
+                  auto &row = screen_buffer[screen_cursor_row];
+                  if (screen_cursor_col < (int)row.size()) {
+                    row.insert(row.begin() + screen_cursor_col,
+                               Cell{char_str, action.attributes});
+                    if (row.size() > (size_t)screen_cols) {
+                      row.pop_back();
+                    }
+                  } else {
+                    // Just append if at end
+                    screen_buffer[screen_cursor_row][screen_cursor_col] =
+                        Cell{char_str, action.attributes};
+                  }
+                }
+              } else {
+                // Overwrite mode
+                screen_buffer[screen_cursor_row][screen_cursor_col] =
+                    Cell{char_str, action.attributes};
+              }
               screen_cursor_col++;
               if (screen_cursor_col >= screen_cols) {
                 screen_cursor_col = 0;
@@ -420,16 +620,54 @@ std::string Terminal::poll_output() {
           if (screen_cursor_col >= screen_cols)
             screen_cursor_col = screen_cols - 1;
         } else if (action.type == ActionType::CLEAR_SCREEN) {
-          for (auto &row : screen_buffer)
-            std::fill(row.begin(), row.end(), Cell{" ", {}});
-          screen_cursor_row = 0;
-          screen_cursor_col = 0;
+          int mode = action.row;
+          if (mode == 2 || mode == 3) {
+            for (auto &row : screen_buffer)
+              std::fill(row.begin(), row.end(), Cell{" ", action.attributes});
+            // Don't reset cursor for J2/J3, usually followed by H if needed
+            // But if it was a full clear, maybe we should?
+            // Let's trust the sequence.
+            if (mode == 3) {
+              // Clear scrollback too (not implemented yet for alternate screen)
+            }
+          } else if (mode == 0) {
+            // Cursor to end
+            if (screen_cursor_row < (int)screen_buffer.size()) {
+              auto &row = screen_buffer[screen_cursor_row];
+              for (int i = screen_cursor_col; i < (int)row.size(); ++i)
+                row[i] = Cell{" ", action.attributes};
+            }
+            for (int i = screen_cursor_row + 1; i < (int)screen_buffer.size();
+                 ++i) {
+              std::fill(screen_buffer[i].begin(), screen_buffer[i].end(),
+                        Cell{" ", action.attributes});
+            }
+          } else if (mode == 1) {
+            // Start to cursor
+            for (int i = 0; i < screen_cursor_row; ++i) {
+              std::fill(screen_buffer[i].begin(), screen_buffer[i].end(),
+                        Cell{" ", action.attributes});
+            }
+            if (screen_cursor_row < (int)screen_buffer.size()) {
+              auto &row = screen_buffer[screen_cursor_row];
+              for (int i = 0; i <= screen_cursor_col && i < (int)row.size();
+                   ++i)
+                row[i] = Cell{" ", action.attributes};
+            }
+          }
         } else if (action.type == ActionType::CLEAR_LINE) {
+          int mode = action.row;
           if (screen_cursor_row < (int)screen_buffer.size()) {
-            // Clear from cursor to end of line
             auto &row = screen_buffer[screen_cursor_row];
-            for (int i = screen_cursor_col; i < (int)row.size(); ++i) {
-              row[i] = Cell{" ", {}};
+            if (mode == 0) {
+              for (int i = screen_cursor_col; i < (int)row.size(); ++i)
+                row[i] = Cell{" ", action.attributes};
+            } else if (mode == 1) {
+              for (int i = 0; i <= screen_cursor_col && i < (int)row.size();
+                   ++i)
+                row[i] = Cell{" ", action.attributes};
+            } else if (mode == 2) {
+              std::fill(row.begin(), row.end(), Cell{" ", action.attributes});
             }
           }
         } else if (action.type == ActionType::INSERT_LINE) {
@@ -449,7 +687,8 @@ std::string Terminal::poll_output() {
                 screen_buffer.erase(screen_buffer.begin() + bottom);
                 screen_buffer.insert(
                     screen_buffer.begin() + screen_cursor_row,
-                    std::vector<Cell>(screen_cols, Cell{" ", {}}));
+                    std::vector<Cell>(screen_cols,
+                                      Cell{" ", action.attributes}));
               }
             }
           }
@@ -469,7 +708,8 @@ std::string Terminal::poll_output() {
                 screen_buffer.erase(screen_buffer.begin() + screen_cursor_row);
                 screen_buffer.insert(
                     screen_buffer.begin() + bottom,
-                    std::vector<Cell>(screen_cols, Cell{" ", {}}));
+                    std::vector<Cell>(screen_cols,
+                                      Cell{" ", action.attributes}));
               }
             }
           }
@@ -479,7 +719,8 @@ std::string Terminal::poll_output() {
             for (int i = 0; i < action.row; ++i) {
               if (screen_cursor_col <=
                   (int)row.size()) { // Allow inserting at end
-                row.insert(row.begin() + screen_cursor_col, Cell{" ", {}});
+                row.insert(row.begin() + screen_cursor_col,
+                           Cell{" ", action.attributes});
                 if (row.size() > (size_t)screen_cols) {
                   row.pop_back();
                 }
@@ -492,7 +733,7 @@ std::string Terminal::poll_output() {
             for (int i = 0; i < action.row; ++i) {
               if (screen_cursor_col < (int)row.size()) {
                 row.erase(row.begin() + screen_cursor_col);
-                row.push_back(Cell{" ", {}});
+                row.push_back(Cell{" ", action.attributes});
               }
             }
           }
@@ -512,20 +753,69 @@ std::string Terminal::poll_output() {
           send_input(response);
         } else if (action.type == ActionType::REPORT_DEVICE_STATUS) {
           send_input("\033[0n");
+        } else if (action.type == ActionType::TAB) {
+          int tab_width = 8;
+          screen_cursor_col = (screen_cursor_col / tab_width + 1) * tab_width;
+          if (screen_cursor_col >= screen_cols) {
+            screen_cursor_col = screen_cols - 1;
+          }
+        } else if (action.type == ActionType::ERASE_CHAR) {
+          if (screen_cursor_row < (int)screen_buffer.size()) {
+            auto &row = screen_buffer[screen_cursor_row];
+            for (int i = 0; i < action.row; ++i) {
+              if (screen_cursor_col + i < (int)row.size()) {
+                row[screen_cursor_col + i] = Cell{" ", action.attributes};
+              }
+            }
+          }
         }
       } else {
         // Normal mode (History)
         if (action.type == ActionType::PRINT_TEXT) {
+          // std::println("Action: PRINT_TEXT '{}'", action.text);
           if (active_line.segments.empty()) {
             active_line.segments.push_back({action.text, action.attributes});
           } else {
             auto &last = active_line.segments.back();
             // Compare attributes (simple comparison)
             bool same_attrs =
-                (last.attributes.foreground == action.attributes.foreground &&
-                 last.attributes.background == action.attributes.background &&
-                 last.attributes.bold ==
-                     action.attributes.bold); // Add others if needed
+                (last.attributes.foreground.type ==
+                     action.attributes.foreground.type &&
+                 (last.attributes.foreground.type !=
+                      TerminalColor::Type::ANSI ||
+                  last.attributes.foreground.ansi_color ==
+                      action.attributes.foreground.ansi_color) &&
+                 (last.attributes.foreground.type !=
+                      TerminalColor::Type::INDEXED ||
+                  last.attributes.foreground.indexed_color ==
+                      action.attributes.foreground.indexed_color) &&
+                 (last.attributes.foreground.type != TerminalColor::Type::RGB ||
+                  (last.attributes.foreground.r ==
+                       action.attributes.foreground.r &&
+                   last.attributes.foreground.g ==
+                       action.attributes.foreground.g &&
+                   last.attributes.foreground.b ==
+                       action.attributes.foreground.b)) &&
+
+                 last.attributes.background.type ==
+                     action.attributes.background.type &&
+                 (last.attributes.background.type !=
+                      TerminalColor::Type::ANSI ||
+                  last.attributes.background.ansi_color ==
+                      action.attributes.background.ansi_color) &&
+                 (last.attributes.background.type !=
+                      TerminalColor::Type::INDEXED ||
+                  last.attributes.background.indexed_color ==
+                      action.attributes.background.indexed_color) &&
+                 (last.attributes.background.type != TerminalColor::Type::RGB ||
+                  (last.attributes.background.r ==
+                       action.attributes.background.r &&
+                   last.attributes.background.g ==
+                       action.attributes.background.g &&
+                   last.attributes.background.b ==
+                       action.attributes.background.b)) &&
+
+                 last.attributes.bold == action.attributes.bold);
             if (same_attrs) {
               last.content += action.text;
             } else {
@@ -542,13 +832,9 @@ std::string Terminal::poll_output() {
           scroll_offset = 0;
           active_line = ParsedLine();
         } else if (action.type == ActionType::CARRIAGE_RETURN) {
-          // For now, ignore or maybe we should clear line?
-          // In simple terminal, CR just moves cursor to start.
-          // But we are appending.
-          // If we want to support overwrite, we need a cursor index in
-          // active_line. For now, let's just append \r if we were storing raw
-          // string, but here we are storing segments. Let's ignore CR for now
-          // as it complicates append-only model.
+          // Handle CR
+          // active_line = ParsedLine(); // DISABLED: This deletes output like
+          // 'ls' which sends line\r\n
         } else if (action.type == ActionType::BACKSPACE) {
           if (!active_line.segments.empty()) {
             auto &last = active_line.segments.back();
@@ -601,126 +887,182 @@ void Terminal::get_color_for_line_type(LineType type, float *color) {
   }
 }
 
-void Terminal::get_color_for_attributes(const TerminalAttributes &attrs,
-                                        float *color) {
-  // Convert ANSI colors to RGB
-  AnsiColor fg = attrs.foreground;
+void Terminal::get_color(const TerminalColor &tc, float *color, bool is_bg) {
+  // Initialize alpha
+  color[3] = 1.0f;
 
-  // If bold is set and color is a standard color (0-7), switch to bright
-  // version (8-15)
-  if (attrs.bold) {
-    switch (fg) {
-    case AnsiColor::BLACK:
-      fg = AnsiColor::BRIGHT_BLACK;
-      break;
-    case AnsiColor::RED:
-      fg = AnsiColor::BRIGHT_RED;
-      break;
-    case AnsiColor::GREEN:
-      fg = AnsiColor::BRIGHT_GREEN;
-      break;
-    case AnsiColor::YELLOW:
-      fg = AnsiColor::BRIGHT_YELLOW;
-      break;
-    case AnsiColor::BLUE:
-      fg = AnsiColor::BRIGHT_BLUE;
-      break;
-    case AnsiColor::MAGENTA:
-      fg = AnsiColor::BRIGHT_MAGENTA;
-      break;
-    case AnsiColor::CYAN:
-      fg = AnsiColor::BRIGHT_CYAN;
-      break;
-    case AnsiColor::WHITE:
-      fg = AnsiColor::BRIGHT_WHITE;
-      break;
-    default:
-      break;
+  if (tc.type == TerminalColor::Type::DEFAULT) {
+    if (is_bg) {
+      // Default Background: Black
+      color[0] = 0.0f;
+      color[1] = 0.0f;
+      color[2] = 0.0f;
+    } else {
+      // Default Foreground: White (or Light Gray)
+      color[0] = 0.8f;
+      color[1] = 0.8f;
+      color[2] = 0.8f;
+    }
+    return;
+  }
+
+  TerminalColor fg = tc; // Copy to modify if needed (e.g. bold)
+
+  // Note: Bold logic usually applies to ANSI colors in FG.
+  // If we want to support bold for ANSI colors passed here:
+  // We don't have 'bold' flag here.
+  // But get_color_for_attributes handled it.
+  // If we want to support bold, we should pass 'bool bold' or handle it
+  // outside. For now, let's assume bold is handled by caller modifying the
+  // color or we ignore it for simplicity in this refactor step, OR we keep
+  // get_color_for_attributes as a wrapper? Actually, get_color_for_attributes
+  // logic for bold was: if (attrs.bold && fg.type == ANSI && fg.ansi_code <=
+  // 7) fg.ansi_code += 8; So we can just handle that logic in the caller if
+  // needed, or pass 'bold' flag. Let's stick to simple color resolution here.
+
+  if (fg.type == TerminalColor::Type::RGB) {
+    color[0] = fg.r / 255.0f;
+    color[1] = fg.g / 255.0f;
+    color[2] = fg.b / 255.0f;
+  } else if (fg.type == TerminalColor::Type::INDEXED) {
+    uint8_t idx = fg.indexed_color;
+    if (idx < 16) {
+      fg.type = TerminalColor::Type::ANSI;
+      fg.ansi_color = static_cast<AnsiColor>(idx);
+    } else if (idx < 232) {
+      idx -= 16;
+      int b = idx % 6;
+      int g = (idx / 6) % 6;
+      int r = (idx / 36) % 6;
+      color[0] = (r ? r * 40 + 55 : 0) / 255.0f;
+      color[1] = (g ? g * 40 + 55 : 0) / 255.0f;
+      color[2] = (b ? b * 40 + 55 : 0) / 255.0f;
+      return;
+    } else {
+      idx -= 232;
+      float gray = (idx * 10 + 8) / 255.0f;
+      color[0] = gray;
+      color[1] = gray;
+      color[2] = gray;
+      return;
     }
   }
 
-  switch (fg) {
-  case AnsiColor::BLACK:
-    color[0] = 0.0f;
-    color[1] = 0.0f;
-    color[2] = 0.0f;
-    break;
-  case AnsiColor::RED:
-    color[0] = 1.0f;
-    color[1] = 0.0f;
-    color[2] = 0.0f;
-    break;
-  case AnsiColor::GREEN:
-    color[0] = 0.0f;
-    color[1] = 1.0f;
-    color[2] = 0.0f;
-    break;
-  case AnsiColor::YELLOW:
-    color[0] = 1.0f;
-    color[1] = 1.0f;
-    color[2] = 0.0f;
-    break;
-  case AnsiColor::BLUE:
-    color[0] = 0.0f;
-    color[1] = 0.0f;
-    color[2] = 1.0f;
-    break;
-  case AnsiColor::MAGENTA:
-    color[0] = 1.0f;
-    color[1] = 0.0f;
-    color[2] = 1.0f;
-    break;
-  case AnsiColor::CYAN:
-    color[0] = 0.0f;
-    color[1] = 1.0f;
-    color[2] = 1.0f;
-    break;
-  case AnsiColor::WHITE:
-    color[0] = 0.8f;
-    color[1] = 0.8f;
-    color[2] = 0.8f; // Dim white for standard
-    break;
-  case AnsiColor::BRIGHT_BLACK: // Gray
-    color[0] = 0.5f;
-    color[1] = 0.5f;
-    color[2] = 0.5f;
-    break;
-  case AnsiColor::BRIGHT_RED:
-    color[0] = 1.0f;
-    color[1] = 0.5f;
-    color[2] = 0.5f;
-    break;
-  case AnsiColor::BRIGHT_GREEN:
-    color[0] = 0.5f;
-    color[1] = 1.0f;
-    color[2] = 0.5f;
-    break;
-  case AnsiColor::BRIGHT_YELLOW:
-    color[0] = 1.0f;
-    color[1] = 1.0f;
-    color[2] = 0.5f;
-    break;
-  case AnsiColor::BRIGHT_BLUE:
-    color[0] = 0.5f;
-    color[1] = 0.5f;
-    color[2] = 1.0f;
-    break;
-  case AnsiColor::BRIGHT_MAGENTA:
-    color[0] = 1.0f;
-    color[1] = 0.5f;
-    color[2] = 1.0f;
-    break;
-  case AnsiColor::BRIGHT_CYAN:
-    color[0] = 0.5f;
-    color[1] = 1.0f;
-    color[2] = 1.0f;
-    break;
-  case AnsiColor::BRIGHT_WHITE:
-    color[0] = 1.0f;
-    color[1] = 1.0f;
-    color[2] = 1.0f;
-    break;
-  default:
-    color[0] = 1.0f;
+  if (fg.type == TerminalColor::Type::ANSI) {
+    switch (fg.ansi_color) {
+    case AnsiColor::BLACK:
+      color[0] = 0.0f;
+      color[1] = 0.0f;
+      color[2] = 0.0f;
+      break;
+    case AnsiColor::RED:
+      color[0] = 1.0f;
+      color[1] = 0.0f;
+      color[2] = 0.0f;
+      break;
+    case AnsiColor::GREEN:
+      color[0] = 0.0f;
+      color[1] = 1.0f;
+      color[2] = 0.0f;
+      break;
+    case AnsiColor::YELLOW:
+      color[0] = 1.0f;
+      color[1] = 1.0f;
+      color[2] = 0.0f;
+      break;
+    case AnsiColor::BLUE:
+      color[0] = 0.0f;
+      color[1] = 0.0f;
+      color[2] = 1.0f;
+      break;
+    case AnsiColor::MAGENTA:
+      color[0] = 1.0f;
+      color[1] = 0.0f;
+      color[2] = 1.0f;
+      break;
+    case AnsiColor::CYAN:
+      color[0] = 0.0f;
+      color[1] = 1.0f;
+      color[2] = 1.0f;
+      break;
+    case AnsiColor::WHITE:
+      color[0] = 0.8f;
+      color[1] = 0.8f;
+      color[2] = 0.8f;
+      break;
+    case AnsiColor::BRIGHT_BLACK:
+      color[0] = 0.5f;
+      color[1] = 0.5f;
+      color[2] = 0.5f;
+      break;
+    case AnsiColor::BRIGHT_RED:
+      color[0] = 1.0f;
+      color[1] = 0.5f;
+      color[2] = 0.5f;
+      break;
+    case AnsiColor::BRIGHT_GREEN:
+      color[0] = 0.5f;
+      color[1] = 1.0f;
+      color[2] = 0.5f;
+      break;
+    case AnsiColor::BRIGHT_YELLOW:
+      color[0] = 1.0f;
+      color[1] = 1.0f;
+      color[2] = 0.5f;
+      break;
+    case AnsiColor::BRIGHT_BLUE:
+      color[0] = 0.5f;
+      color[1] = 0.5f;
+      color[2] = 1.0f;
+      break;
+    case AnsiColor::BRIGHT_MAGENTA:
+      color[0] = 1.0f;
+      color[1] = 0.5f;
+      color[2] = 1.0f;
+      break;
+    case AnsiColor::BRIGHT_CYAN:
+      color[0] = 0.5f;
+      color[1] = 1.0f;
+      color[2] = 1.0f;
+      break;
+    case AnsiColor::BRIGHT_WHITE:
+      color[0] = 1.0f;
+      color[1] = 1.0f;
+      color[2] = 1.0f;
+      break;
+    case AnsiColor::RESET:
+      if (is_bg) {
+        color[0] = 0.0f;
+        color[1] = 0.0f;
+        color[2] = 0.0f;
+      } else {
+        color[0] = 0.8f;
+        color[1] = 0.8f;
+        color[2] = 0.8f;
+      }
+      break;
+    default:
+      if (is_bg) {
+        color[0] = 0.0f;
+        color[1] = 0.0f;
+        color[2] = 0.0f;
+      } else {
+        color[0] = 0.8f;
+        color[1] = 0.8f;
+        color[2] = 0.8f;
+      }
+    }
   }
+}
+
+void Terminal::get_color_for_attributes(const TerminalAttributes &attrs,
+                                        float *color) {
+  TerminalColor fg = attrs.foreground;
+  if (attrs.bold && fg.type == TerminalColor::Type::ANSI) {
+    int ansi_code = static_cast<int>(fg.ansi_color);
+    if (ansi_code >= 0 && ansi_code <= 7) {
+      fg.ansi_color = static_cast<AnsiColor>(ansi_code + 8);
+    }
+  }
+  get_color(fg, color, false);
 }

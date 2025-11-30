@@ -47,8 +47,14 @@ public:
                              float scale, const float *color, int window_width,
                              int window_height);
   float measure_text_width(const std::string &text, float scale);
+  float get_char_width();
+  float get_line_height();
+  void draw_solid_rectangle(float x, float y, float w, float h,
+                            const float *color, int window_width,
+                            int window_height);
 
 private:
+  unsigned int white_texture;
   std::map<char, Character> characters;
   std::map<unsigned int, Character>
       glyphs; // Map HarfBuzz glyph IDs to characters

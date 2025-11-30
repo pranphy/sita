@@ -1,4 +1,5 @@
 #include <format>
+#include <fstream>
 #include <iostream>
 #include <print>
 
@@ -43,7 +44,24 @@ TextRenderer::TextRenderer()
                     "NotoSerifDevanagari-Regular.ttf") {
 
   // Initialize shader - look for files in current directory (build directory)
-  shader = new Shader("text.vert", "text.frag");
+  // Initialize shader - try multiple paths
+  std::string vertPath = "text.vert";
+  std::string fragPath = "text.frag";
+
+  // Check if files exist, if not try ../shaders/
+  std::ifstream f(vertPath);
+  if (!f.good()) {
+    vertPath = "../shaders/text.vert";
+    fragPath = "../shaders/text.frag";
+    std::ifstream f2(vertPath);
+    if (!f2.good()) {
+      vertPath = "shaders/text.vert";
+      fragPath = "shaders/text.frag";
+    }
+  }
+
+  std::println("Loading shaders from: {} and {}", vertPath, fragPath);
+  shader = new Shader(vertPath.c_str(), fragPath.c_str());
 
   // Setup buffers
   setup_buffers();
@@ -55,6 +73,17 @@ TextRenderer::TextRenderer()
   load_font(main_font, 0);
 
   load_font(fallback_font, 1);
+
+  // Create white texture for solid rectangles
+  glGenTextures(1, &white_texture);
+  glBindTexture(GL_TEXTURE_2D, white_texture);
+  unsigned char white[] = {255};
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, 1, 1, 0, GL_RED, GL_UNSIGNED_BYTE,
+               white);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 }
 
 TextRenderer::~TextRenderer() {
@@ -139,6 +168,12 @@ void TextRenderer::load_glyph(unsigned int glyph_id, unsigned int font_index) {
     return;
   }
 
+  // Debug log for empty glyphs
+  if (ft_faces[font_index]->glyph->bitmap.width == 0 ||
+      ft_faces[font_index]->glyph->bitmap.rows == 0) {
+    // std::println("Warning: Empty bitmap for glyph {}", glyph_id);
+  }
+
   // Generate texture
   unsigned int texture;
   oglutil::load_glyph_to_texture(ft_faces[font_index]->glyph, texture);
@@ -180,8 +215,8 @@ std::vector<ShapedGlyph> TextRenderer::shape_text(const std::string &text) {
     hb_buffer_set_script(hb_buffer, HB_SCRIPT_DEVANAGARI);
     hb_buffer_set_language(hb_buffer, hb_language_from_string("hi", -1));
   } else {
-    hb_buffer_set_script(hb_buffer, HB_SCRIPT_LATIN);
-    hb_buffer_set_language(hb_buffer, hb_language_from_string("en", -1));
+    // For non-Devanagari, let HarfBuzz guess the script and direction
+    hb_buffer_guess_segment_properties(hb_buffer);
   }
 
   // Set direction to LTR (Devanagari is LTR)
@@ -283,4 +318,52 @@ float TextRenderer::measure_text_width(const std::string &text, float scale) {
     width += shaped_glyph.x_advance * scale;
   }
   return width;
+}
+
+float TextRenderer::get_char_width() {
+  // Measure width of 'M' as a representative wide character
+  return measure_text_width("M", 1.0f);
+}
+
+float TextRenderer::get_line_height() {
+  // Return font size + padding (e.g. 50.0f for 48px font)
+  return 50.0f;
+}
+
+void TextRenderer::draw_solid_rectangle(float x, float y, float w, float h,
+                                        const float *color, int window_width,
+                                        int window_height) {
+  // Enable blending
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+  // Activate shader
+  shader->use();
+  shader->set_vec3("textColor", color[0], color[1], color[2]);
+
+  // Create orthographic projection matrix using window dimensions
+  glm::mat4 projection = glm::ortho(0.0f, static_cast<float>(window_width),
+                                    0.0f, static_cast<float>(window_height));
+  shader->set_mat4("projection", glm::value_ptr(projection));
+
+  glActiveTexture(GL_TEXTURE0);
+  glBindVertexArray(vao);
+  glBindTexture(GL_TEXTURE_2D, white_texture);
+
+  // Update VBO for this rectangle
+  // y is bottom-left, so we draw from y to y+h
+  float vertices[6][4] = {{x, y + h, 0.0f, 0.0f},    {x, y, 0.0f, 1.0f},
+                          {x + w, y, 1.0f, 1.0f},
+
+                          {x, y + h, 0.0f, 0.0f},    {x + w, y, 1.0f, 1.0f},
+                          {x + w, y + h, 1.0f, 0.0f}};
+
+  glBindBuffer(GL_ARRAY_BUFFER, vbo);
+  glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+
+  glBindVertexArray(0);
+  glBindTexture(GL_TEXTURE_2D, 0);
 }

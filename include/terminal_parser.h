@@ -24,7 +24,10 @@ enum class ActionType {
   DELETE_CHAR,
   SET_SCROLL_REGION,
   REPORT_CURSOR_POSITION,
-  REPORT_DEVICE_STATUS
+  REPORT_DEVICE_STATUS,
+  TAB,
+  ERASE_CHAR,
+  SET_INSERT_MODE
 };
 
 enum class AnsiColor {
@@ -47,9 +50,18 @@ enum class AnsiColor {
   RESET
 };
 
+struct TerminalColor {
+  enum class Type { DEFAULT, ANSI, INDEXED, RGB } type = Type::DEFAULT;
+  AnsiColor ansi_color = AnsiColor::WHITE;
+  uint8_t indexed_color = 0;
+  uint8_t r = 0;
+  uint8_t g = 0;
+  uint8_t b = 0;
+};
+
 struct TerminalAttributes {
-  AnsiColor foreground = AnsiColor::WHITE;
-  AnsiColor background = AnsiColor::BLACK;
+  TerminalColor foreground; // Default initialized to Type::DEFAULT
+  TerminalColor background; // Default initialized to Type::DEFAULT
   bool bold = false;
   bool italic = false;
   bool underline = false;

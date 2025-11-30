@@ -67,6 +67,10 @@ void tty::setup_pty(std::string shell_path) {
 
   if (shell_pid == 0) { // Child process
     close(pty_master_fd);
+    setsid(); // Create a new session
+    if (ioctl(pty_slave_fd, TIOCSCTTY, NULL) == -1) {
+      // std::println(std::cerr, "Error: ioctl(TIOCSCTTY) failed.");
+    }
     dup2(pty_slave_fd, STDIN_FILENO);
     dup2(pty_slave_fd, STDOUT_FILENO);
     dup2(pty_slave_fd, STDERR_FILENO);
@@ -78,6 +82,10 @@ void tty::setup_pty(std::string shell_path) {
     std::vector<const char *> argv;
     argv.push_back(shell_path.c_str());
     argv.push_back(nullptr);
+
+    // Set environment variables to ensure correct behavior
+    setenv("TERM", "xterm-256color", 1);
+    setenv("COLORTERM", "truecolor", 1);
 
     execvp(argv[0], (char *const *)argv.data());
 
@@ -139,3 +147,12 @@ void tty::add_to_screen_buffer(std::string s) {
 void tty::close_master() { close(pty_master_fd); }
 
 void tty::main_loop() {}
+
+void tty::set_window_size(int rows, int cols) {
+  struct winsize ws;
+  ws.ws_row = rows;
+  ws.ws_col = cols;
+  ws.ws_xpixel = 0;
+  ws.ws_ypixel = 0;
+  ioctl(pty_master_fd, TIOCSWINSZ, &ws);
+}
