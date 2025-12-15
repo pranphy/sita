@@ -38,8 +38,7 @@ std::string show_char(Character c) {
       c.width, c.height, c.bearing_x, c.bearing_y, c.advance);
 }
 TextRenderer::TextRenderer()
-    : main_font("/home/pranphy/.local/share/fonts/iosevka/"
-                "IosevkaTermSlabNerdFont-Regular.ttf"),
+    : main_font("/home/pranphy/.local/share/fonts/iosevka/IosevkaTermSlabNerdFont-Regular.ttf"),
       fallback_font("/home/pranphy/.local/share/fonts/devanagari/NotoSerif/"
                     "NotoSerifDevanagari-Regular.ttf") {
 

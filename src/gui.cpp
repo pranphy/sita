@@ -1,5 +1,9 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+#ifdef HAVE_WAYLAND
+#define GLFW_EXPOSE_NATIVE_WAYLAND
+#include <GLFW/glfw3native.h>
+#endif
 #include <iostream>
 #include <print>
 #include <thread>
@@ -21,7 +25,6 @@ int GLFWApp::create(int width, int height, const char *title) {
   window = glfwCreateWindow(width, height, title, NULL, NULL);
   if (!window) {
     std::println(std::cerr, "ERROR::GLFW: Failed to create GLFW window");
-    ;
     glfwTerminate();
     return -1;
   }
@@ -72,7 +75,34 @@ int GLFWApp::create(int width, int height, const char *title) {
   glViewport(0, 0, width, height);
 
   // Set clear color
-  glClearColor(0.0f, 0.0f, 0.1f, 1.0f);
+  glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
+#ifdef HAVE_WAYLAND
+  // Initialize Wayland text input if on Wayland
+  if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) {
+    auto *wl_display = glfwGetWaylandDisplay();
+    wayland_input = std::make_unique<WaylandTextInput>(wl_display);
+
+    if (wayland_input->is_valid()) {
+      std::println("Wayland text-input initialized successfully");
+
+      // Set up callbacks
+      wayland_input->set_preedit_callback(
+          [this](const std::string &text, int cursor) {
+            terminal.set_preedit(text, cursor);
+          });
+
+      wayland_input->set_commit_callback([this](const std::string &text) {
+        terminal.send_input(text);
+        terminal.clear_preedit();
+      });
+
+      // Don't call focus_in() here - wait for the surface enter event
+    } else {
+      std::println(std::cerr, "Failed to initialize Wayland text-input");
+    }
+  }
+#endif
 
   return 0;
 }
@@ -94,6 +124,14 @@ void GLFWApp::mainloop() {
   while (!glfwWindowShouldClose(window)) {
     // lets just slow things downa a bit, shall we?
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+#ifdef HAVE_WAYLAND
+    // Dispatch Wayland events if on Wayland
+    if (wayland_input && wayland_input->is_valid()) {
+      wl_display_dispatch_pending(glfwGetWaylandDisplay());
+    }
+#endif
+
     auto output = terminal.poll_output();
     if (output.find('\x04') != std::string::npos) {
       glfwSetWindowShouldClose(window, true);

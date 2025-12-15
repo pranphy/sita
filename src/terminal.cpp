@@ -75,6 +75,16 @@ void Terminal::key_pressed(char c, int /*type*/) {
   send_input(s);
 }
 
+void Terminal::set_preedit(const std::string &text, int cursor) {
+  preedit_text = text;
+  preedit_cursor = cursor;
+}
+
+void Terminal::clear_preedit() {
+  preedit_text.clear();
+  preedit_cursor = 0;
+}
+
 std::string Terminal::poll_output() {
   auto result = term.handle_pty_output();
   if (!result.empty()) {

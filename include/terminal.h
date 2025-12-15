@@ -30,6 +30,12 @@ public:
   void send_input(const std::string &input);
 
   std::string poll_output();
+
+  // Input method support
+  void set_preedit(const std::string &text, int cursor);
+  const std::string &get_preedit() const { return preedit_text; }
+  int get_preedit_cursor() const { return preedit_cursor; }
+  void clear_preedit();
   tty term;
 
 public:
@@ -53,6 +59,10 @@ public:
   ParsedLine active_line; // Replaces active_raw_line for better color support
   bool last_char_was_newline = true;
   TerminalParser parser;
+
+  // Input method preedit state
+  std::string preedit_text;
+  int preedit_cursor = 0;
 };
 
 #endif // TERMINAL_H

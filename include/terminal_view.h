@@ -40,6 +40,7 @@ private:
   void update_dimensions();
   void render_line(const ParsedLine &line, float &y_pos);
   void render_cursor(float x, float y);
+  void render_preedit(float x, float y);
 
   // Color helpers
   void get_color(const TerminalColor &color, float *out_color,
