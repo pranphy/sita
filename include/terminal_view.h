@@ -20,6 +20,9 @@ public:
   // Font metrics
   float get_line_height() const { return LINE_HEIGHT; }
   float get_cell_width() const { return CELL_WIDTH; }
+  float get_char_width() const { return CELL_WIDTH; } // Alias
+
+  Coord get_cursor_pos() const { return cursor_pos; }
 
 private:
   Terminal &terminal;

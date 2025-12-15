@@ -45,6 +45,8 @@ public:
   // Alternate screen buffer for apps like vim
   bool alternate_screen_active = false;
   bool insert_mode = false;
+  bool auto_wrap_mode = true;                   // Default ON
+  bool wrap_next = false;                       // Delayed wrap state
   std::vector<std::vector<Cell>> screen_buffer; // 2D grid
   int screen_cursor_row = 0;
   int screen_cursor_col = 0;
@@ -63,6 +65,16 @@ public:
   // Input method preedit state
   std::string preedit_text;
   int preedit_cursor = 0;
+
+  // Helper
+  void perform_scroll_up();
+  void perform_scroll_down();
+
+  // Cursor state
+  int saved_cursor_row = 0;
+  int saved_cursor_col = 0;
+  bool cursor_visible = true;
+  bool application_cursor_keys = false;
 };
 
 #endif // TERMINAL_H

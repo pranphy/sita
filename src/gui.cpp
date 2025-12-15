@@ -65,6 +65,17 @@ int GLFWApp::create(int width, int height, const char *title) {
         }
       });
 
+  glfwSetWindowFocusCallback(window, [](GLFWwindow *window, int focused) {
+    auto app = static_cast<GLFWApp *>(glfwGetWindowUserPointer(window));
+    if (app && app->wayland_input) {
+      if (focused) {
+        app->wayland_input->focus_in();
+      } else {
+        app->wayland_input->focus_out();
+      }
+    }
+  });
+
   // Initialize GLEW
   if (glewInit() != GLEW_OK) {
     std::println(std::cerr, "ERROR::GLEW: Failed to initialize GLEW");
@@ -97,7 +108,10 @@ int GLFWApp::create(int width, int height, const char *title) {
         terminal.clear_preedit();
       });
 
-      // Don't call focus_in() here - wait for the surface enter event
+      // Initial focus if window is already focused
+      if (glfwGetWindowAttrib(window, GLFW_FOCUSED)) {
+        wayland_input->focus_in();
+      }
     } else {
       std::println(std::cerr, "Failed to initialize Wayland text-input");
     }
@@ -138,6 +152,25 @@ void GLFWApp::mainloop() {
     }
     view.update_cursor_blink();
     view.render();
+
+    // Update input method cursor position
+#ifdef HAVE_WAYLAND
+    if (wayland_input && wayland_input->is_valid()) {
+      auto cpos = view.get_cursor_pos();
+      // Convert y to be from top-left for Wayland (OpenGL is bottom-left
+      // usually, but TerminalView seems to calculate for top-left logic or uses
+      // y--) TerminalView::render uses: cursor_pos = {25.0f, win_height -
+      // LINE_HEIGHT - rows...} This is OpenGL coordinates (0,0 is bottom-left).
+      // Wayland expects surface-local coordinates (0,0 is top-left).
+      // We need to invert Y.
+      int win_w, win_h;
+      glfwGetWindowSize(window, &win_w, &win_h);
+      int y_wayland = win_h - (int)cpos.y - (int)view.get_line_height();
+      wayland_input->set_cursor_rect((int)cpos.x, y_wayland,
+                                     (int)view.get_char_width(),
+                                     (int)view.get_line_height());
+    }
+#endif
 
     glfwSwapBuffers(window);
     glfwPollEvents();

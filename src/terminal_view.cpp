@@ -240,7 +240,7 @@ void TerminalView::render() {
   // Render preedit text if available
   if (!terminal.get_preedit().empty()) {
     render_preedit(cursor_pos.x, cursor_pos.y);
-  } else if (cursor_visible) {
+  } else if (cursor_visible && terminal.cursor_visible) {
     // Render normal cursor only if no preedit (or render it after? usually
     // preedit replaces cursor)
     render_cursor(cursor_pos.x, cursor_pos.y);
