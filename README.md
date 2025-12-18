@@ -1,9 +1,9 @@
-# SITA 
-SImple Terminal Application
+# SImple Terminal Application 
+
 
 ## Description
-This is a terminal emulator written in C++.
-This is a GPU-accelerated terminal application that hopes to render complex scripts like Devanagari nicely.
+This is a terminal emulator written in C++. This is a GPU-accelerated terminal application that hopes to render complex scripts like Devanagari nicely.
+
 Demo
 ![](screenshot.png)
 
@@ -11,6 +11,8 @@ Demo
 - Supports Indic fonts like Devanagari and has nice support for Indic languages.
 
 ## Installation
+You need latest c++ compiler `c++23` compatible.
+
 To install this project, follow these steps:
 1. Install Meson and Ninja:
    ```bash
@@ -23,5 +25,5 @@ To install this project, follow these steps:
    ninja
    ```
 
-
-
+> [! WARNING ]
+> This is very volatile and rapidly develooping application. Use with caution.

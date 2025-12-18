@@ -6,3 +6,4 @@ debug*.log
 log/
 GEMINI.md
 ext/
+*.log
