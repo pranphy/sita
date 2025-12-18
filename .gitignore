@@ -4,3 +4,5 @@ compile
 build_*.txt
 debug*.log
 log/
+GEMINI.md
+ext/
