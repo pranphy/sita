@@ -20,6 +20,9 @@ public:
   // Font metrics
   float get_line_height() const { return LINE_HEIGHT; }
   float get_cell_width() const { return CELL_WIDTH; }
+  float get_char_width() const { return CELL_WIDTH; } // Alias
+
+  Coord get_cursor_pos() const { return cursor_pos; }
 
 private:
   Terminal &terminal;
@@ -40,6 +43,7 @@ private:
   void update_dimensions();
   void render_line(const ParsedLine &line, float &y_pos);
   void render_cursor(float x, float y);
+  void render_preedit(float x, float y);
 
   // Color helpers
   void get_color(const TerminalColor &color, float *out_color,

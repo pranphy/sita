@@ -82,6 +82,21 @@ void TerminalParser::handle_escape(char c,
     str_buf.clear();
   } else if (c == '(' || c == ')') {
     state = State::ALT_CHARSET;
+  } else if (c == 'M') {
+    actions.push_back({ActionType::REVERSE_INDEX});
+    state = State::NORMAL;
+  } else if (c == 'E') {
+    actions.push_back({ActionType::NEXT_LINE});
+    state = State::NORMAL;
+  } else if (c == 'D') {
+    actions.push_back({ActionType::SCROLL_UP}); // Index is mostly scroll up
+    state = State::NORMAL;
+  } else if (c == '7') {
+    actions.push_back({ActionType::SAVE_CURSOR});
+    state = State::NORMAL;
+  } else if (c == '8') {
+    actions.push_back({ActionType::RESTORE_CURSOR});
+    state = State::NORMAL;
   } else {
     state = State::NORMAL;
   }
@@ -101,6 +116,16 @@ void TerminalParser::handle_csi(char c, std::vector<TerminalAction> &actions) {
     } else {
       csi_args.push_back(0); // Default to 0 if empty
     }
+  } else if (c == '>' || c == '=') {
+    // CSI Private Mode Formatters (like CSI > Ps) or CSI = Ps
+    // Simplification: treat as part of control flow or ignore for now?
+    // Actually, CSI > 0 c is often modifying resource.
+    // Let's ignore logic for special CSI prefixes until needed.
+    // BUT we need to not break parsing.
+    // If it's a parameter byte (30-3F), it should be allowed in args?
+    // ECMA-48 says 0x30-0x3F are parameter bytes.
+    // '>' is 0x3E. '=' is 0x3D.
+    // '?' is 0x3F.
   } else if (c == '?') {
     csi_priv = true;
   } else if (c == ' ') {
@@ -168,6 +193,15 @@ void TerminalParser::handle_csi(char c, std::vector<TerminalAction> &actions) {
         if (csi_args.size() > 0 && csi_args[0] == 1049) {
           actions.push_back(
               {ActionType::SET_ALTERNATE_BUFFER, "", {}, 0, 0, true});
+        } else if (csi_args.size() > 0 && csi_args[0] == 25) {
+          actions.push_back(
+              {ActionType::SET_CURSOR_VISIBLE, "", {}, 0, 0, true});
+        } else if (csi_args.size() > 0 && csi_args[0] == 7) {
+          actions.push_back(
+              {ActionType::SET_AUTO_WRAP_MODE, "", {}, 0, 0, true});
+        } else if (csi_args.size() > 0 && csi_args[0] == 1) {
+          actions.push_back(
+              {ActionType::SET_APPLICATION_CURSOR_KEYS, "", {}, 0, 0, true});
         }
       } else {
         if (csi_args.size() > 0 && csi_args[0] == 4) {
@@ -180,6 +214,15 @@ void TerminalParser::handle_csi(char c, std::vector<TerminalAction> &actions) {
         if (csi_args.size() > 0 && csi_args[0] == 1049) {
           actions.push_back(
               {ActionType::SET_ALTERNATE_BUFFER, "", {}, 0, 0, false});
+        } else if (csi_args.size() > 0 && csi_args[0] == 25) {
+          actions.push_back(
+              {ActionType::SET_CURSOR_VISIBLE, "", {}, 0, 0, false});
+        } else if (csi_args.size() > 0 && csi_args[0] == 7) {
+          actions.push_back(
+              {ActionType::SET_AUTO_WRAP_MODE, "", {}, 0, 0, false});
+        } else if (csi_args.size() > 0 && csi_args[0] == 1) {
+          actions.push_back(
+              {ActionType::SET_APPLICATION_CURSOR_KEYS, "", {}, 0, 0, false});
         }
       } else {
         if (csi_args.size() > 0 && csi_args[0] == 4) {
@@ -222,11 +265,27 @@ void TerminalParser::handle_csi(char c, std::vector<TerminalAction> &actions) {
         actions.push_back({ActionType::REPORT_DEVICE_STATUS});
       }
     } break;
+    case 'S': // SU - Scroll Up
+    {
+      int n = csi_args.empty() ? 1 : csi_args[0];
+      actions.push_back({ActionType::SCROLL_TEXT_UP, "", {}, n});
+    } break;
+    case 'T': // SD - Scroll Down
+    {
+      int n = csi_args.empty() ? 1 : csi_args[0];
+      actions.push_back({ActionType::SCROLL_TEXT_DOWN, "", {}, n});
+    } break;
     case 'X': // ECH - Erase Character
     {
       int n = csi_args.empty() ? 1 : csi_args[0];
       actions.push_back({ActionType::ERASE_CHAR, "", current_attributes, n});
     } break;
+    case 's':
+      actions.push_back({ActionType::SAVE_CURSOR});
+      break;
+    case 'u':
+      actions.push_back({ActionType::RESTORE_CURSOR});
+      break;
     }
     state = State::NORMAL;
   }

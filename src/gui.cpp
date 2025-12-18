@@ -1,5 +1,9 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+#ifdef HAVE_WAYLAND
+#define GLFW_EXPOSE_NATIVE_WAYLAND
+#include <GLFW/glfw3native.h>
+#endif
 #include <iostream>
 #include <print>
 #include <thread>
@@ -21,7 +25,6 @@ int GLFWApp::create(int width, int height, const char *title) {
   window = glfwCreateWindow(width, height, title, NULL, NULL);
   if (!window) {
     std::println(std::cerr, "ERROR::GLFW: Failed to create GLFW window");
-    ;
     glfwTerminate();
     return -1;
   }
@@ -62,6 +65,17 @@ int GLFWApp::create(int width, int height, const char *title) {
         }
       });
 
+  glfwSetWindowFocusCallback(window, [](GLFWwindow *window, int focused) {
+    auto app = static_cast<GLFWApp *>(glfwGetWindowUserPointer(window));
+    if (app && app->wayland_input) {
+      if (focused) {
+        app->wayland_input->focus_in();
+      } else {
+        app->wayland_input->focus_out();
+      }
+    }
+  });
+
   // Initialize GLEW
   if (glewInit() != GLEW_OK) {
     std::println(std::cerr, "ERROR::GLEW: Failed to initialize GLEW");
@@ -72,7 +86,37 @@ int GLFWApp::create(int width, int height, const char *title) {
   glViewport(0, 0, width, height);
 
   // Set clear color
-  glClearColor(0.0f, 0.0f, 0.1f, 1.0f);
+  glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
+#ifdef HAVE_WAYLAND
+  // Initialize Wayland text input if on Wayland
+  if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) {
+    auto *wl_display = glfwGetWaylandDisplay();
+    wayland_input = std::make_unique<WaylandTextInput>(wl_display);
+
+    if (wayland_input->is_valid()) {
+      std::println("Wayland text-input initialized successfully");
+
+      // Set up callbacks
+      wayland_input->set_preedit_callback(
+          [this](const std::string &text, int cursor) {
+            terminal.set_preedit(text, cursor);
+          });
+
+      wayland_input->set_commit_callback([this](const std::string &text) {
+        terminal.send_input(text);
+        terminal.clear_preedit();
+      });
+
+      // Initial focus if window is already focused
+      if (glfwGetWindowAttrib(window, GLFW_FOCUSED)) {
+        wayland_input->focus_in();
+      }
+    } else {
+      std::println(std::cerr, "Failed to initialize Wayland text-input");
+    }
+  }
+#endif
 
   return 0;
 }
@@ -94,12 +138,39 @@ void GLFWApp::mainloop() {
   while (!glfwWindowShouldClose(window)) {
     // lets just slow things downa a bit, shall we?
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+#ifdef HAVE_WAYLAND
+    // Dispatch Wayland events if on Wayland
+    if (wayland_input && wayland_input->is_valid()) {
+      wl_display_dispatch_pending(glfwGetWaylandDisplay());
+    }
+#endif
+
     auto output = terminal.poll_output();
     if (output.find('\x04') != std::string::npos) {
       glfwSetWindowShouldClose(window, true);
     }
     view.update_cursor_blink();
     view.render();
+
+    // Update input method cursor position
+#ifdef HAVE_WAYLAND
+    if (wayland_input && wayland_input->is_valid()) {
+      auto cpos = view.get_cursor_pos();
+      // Convert y to be from top-left for Wayland (OpenGL is bottom-left
+      // usually, but TerminalView seems to calculate for top-left logic or uses
+      // y--) TerminalView::render uses: cursor_pos = {25.0f, win_height -
+      // LINE_HEIGHT - rows...} This is OpenGL coordinates (0,0 is bottom-left).
+      // Wayland expects surface-local coordinates (0,0 is top-left).
+      // We need to invert Y.
+      int win_w, win_h;
+      glfwGetWindowSize(window, &win_w, &win_h);
+      int y_wayland = win_h - (int)cpos.y - (int)view.get_line_height();
+      wayland_input->set_cursor_rect((int)cpos.x, y_wayland,
+                                     (int)view.get_char_width(),
+                                     (int)view.get_line_height());
+    }
+#endif
 
     glfwSwapBuffers(window);
     glfwPollEvents();

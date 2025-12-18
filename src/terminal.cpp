@@ -1,6 +1,7 @@
 #include "terminal.h"
 #include "terminal_parser.h"
 #include "utils.h"
+#include <cwchar> // for wcwidth if available, or just use custom logic
 #include <unistd.h>
 
 bool tty::running{true};
@@ -58,6 +59,51 @@ void Terminal::scroll_page_down() {
 
 void Terminal::scroll_to_bottom() { scroll_offset = 0; }
 
+void Terminal::perform_scroll_up() {
+  int bottom =
+      (scroll_region_bottom == -1) ? screen_rows - 1 : scroll_region_bottom;
+  int top = scroll_region_top;
+
+  // Ensure bounds
+  if (bottom >= (int)screen_buffer.size())
+    bottom = (int)screen_buffer.size() - 1;
+  if (top < 0)
+    top = 0;
+  if (top > bottom)
+    top = bottom;
+
+  if (top < (int)screen_buffer.size() && bottom < (int)screen_buffer.size()) {
+    screen_buffer.erase(screen_buffer.begin() + top);
+    screen_buffer.insert(screen_buffer.begin() + bottom,
+                         std::vector<Cell>(screen_cols, Cell{" ", {}}));
+  }
+}
+
+void Terminal::perform_scroll_down() {
+  int bottom =
+      (scroll_region_bottom == -1) ? screen_rows - 1 : scroll_region_bottom;
+  int top = scroll_region_top;
+
+  // Ensure bounds
+  if (bottom >= (int)screen_buffer.size())
+    bottom = (int)screen_buffer.size() - 1;
+  if (top < 0)
+    top = 0;
+  if (top > bottom)
+    top = bottom;
+
+  if (top < (int)screen_buffer.size() && bottom < (int)screen_buffer.size()) {
+    screen_buffer.insert(screen_buffer.begin() + top,
+                         std::vector<Cell>(screen_cols, Cell{" ", {}}));
+    if (bottom + 1 < (int)screen_buffer.size()) {
+      screen_buffer.erase(screen_buffer.begin() + bottom + 1);
+    } else {
+      // Should not happen if size is maintained, but safety
+      screen_buffer.pop_back();
+    }
+  }
+}
+
 Terminal::~Terminal() {
   // Cleanup if needed
 }
@@ -73,6 +119,16 @@ void Terminal::key_pressed(char c, int /*type*/) {
   // Deprecated, but kept for compatibility if needed
   std::string s(1, c);
   send_input(s);
+}
+
+void Terminal::set_preedit(const std::string &text, int cursor) {
+  preedit_text = text;
+  preedit_cursor = cursor;
+}
+
+void Terminal::clear_preedit() {
+  preedit_text.clear();
+  preedit_cursor = 0;
 }
 
 std::string Terminal::poll_output() {
@@ -129,33 +185,146 @@ std::string Terminal::poll_output() {
             std::string char_str = pending_utf8.substr(pos, needed);
             pos += needed;
 
-            if (screen_cursor_row < screen_rows &&
-                screen_cursor_col < screen_cols) {
-              if (insert_mode) {
-                // Insert mode: shift characters right
-                if (screen_cursor_row < (int)screen_buffer.size()) {
-                  auto &row = screen_buffer[screen_cursor_row];
-                  if (screen_cursor_col < (int)row.size()) {
-                    row.insert(row.begin() + screen_cursor_col,
-                               Cell{char_str, action.attributes});
-                    if (row.size() > (size_t)screen_cols) {
-                      row.pop_back();
-                    }
-                  } else {
-                    // Just append if at end
-                    screen_buffer[screen_cursor_row][screen_cursor_col] =
-                        Cell{char_str, action.attributes};
+            int width = 1;
+            // Simple width check: combining chars have width 0.
+            // C++ standard wcwidth isn't always reliable for all unicode.
+            // Using utils logic or checking known ranges.
+            // For now, let's assume if it's Devanagari 0x0900-0x097F, we check
+            // specific combining chars? Or simpler: standard Unix wcwidth?
+            // Since we decoded a string 'char_str', we need to check its width.
+            // Let's iterate the codepoints in char_str (should be 1 usually,
+            // unless decomposed?) pending_utf8 processing extracts ONE
+            // codepoint sequence (1-4 bytes).
+
+            // Check if combining:
+            // Devanagari: 0900-0903, 093A, 093B, 093C (Nukta), 093E-094F
+            // (Vowels/Virama), 0951-0957, 0962-0963. This is tedious to map
+            // manually. Let's use a heuristic: if we are overwriting and the
+            // PREVIOUS cell allows combining, combine. But we need to know if
+            // THIS char is combining.
+
+            // Re-decode for logical check (inefficient but safe)
+            size_t tmp_pos = 0;
+            unsigned int cp = utl::get_next_codepoint(char_str, tmp_pos);
+
+            bool is_combining = false;
+            if (cp >= 0x0900 && cp <= 0x097F) {
+              // Devanagari Vowels (Matras), Virama, Nukta usually combine
+              if ((cp >= 0x0900 && cp <= 0x0903) ||
+                  (cp >= 0x093A && cp <= 0x094F) ||
+                  (cp >= 0x0951 && cp <= 0x0957) ||
+                  (cp >= 0x0962 && cp <= 0x0963)) {
+                is_combining = true;
+                width = 0;
+              }
+            } else if (cp >= 0x0300 && cp <= 0x036F) {
+              is_combining = true; // Generic combining diacritical marks
+              width = 0;
+            } else if (cp == 0x200D || cp == 0x200C) {
+              is_combining = true; // ZWJ, ZWNJ
+              width = 0;
+            }
+
+            // Handle delayed wrap
+            if (auto_wrap_mode && wrap_next) {
+              // If it is a combining char, we should probably wrap ONLY if we
+              // can't combine with prev? Standard behavior: if we wrapped, we
+              // are at col 0. Previous char is on previous line? Most terminals
+              // don't combine across lines easily. So we treat it as standalone
+              // if we wrapped.
+              if (!is_combining) {
+                wrap_next = false;
+                screen_cursor_col = 0;
+                int bottom = (scroll_region_bottom == -1)
+                                 ? screen_rows - 1
+                                 : scroll_region_bottom;
+                if (screen_cursor_row == bottom) {
+                  perform_scroll_up();
+                } else {
+                  screen_cursor_row++;
+                  if (screen_cursor_row >= screen_rows)
+                    screen_cursor_row = screen_rows - 1;
+                }
+              }
+            }
+
+            if (screen_cursor_row < screen_rows) {
+              if (screen_cursor_col >= screen_cols)
+                screen_cursor_col = screen_cols - 1;
+
+              bool handled_combine = false;
+              if (is_combining) {
+                // Try to append to previous char IF we haven't moved yet (width
+                // 0 logic) Actually, if we are at logical wrap_next state
+                // (col=cols-1, wait=true), 'previous' is current cell? If we
+                // are at col 10, previous is 9?
+                int target_col = screen_cursor_col;
+                int target_row = screen_cursor_row;
+
+                // If we just wrapped (col=0), previous is prev_row[cols-1]?
+                // (Complex) Let's assume combining stays in current cell logic:
+                // Standard: combining mark applies to char AT cursor? No,
+                // PREVIOUS char. But in cell-based: if we wrote 'a' (cursor
+                // moves), then '`' (combining). Cursor is at X+1. We want to
+                // modify cell at X.
+
+                // Check if we need to back up
+                if (target_col > 0) {
+                  target_col--;
+                } else if (wrap_next) {
+                  // Cursor at right edge waiting to wrap. Previous char is AT
+                  // this column. keep target_col as is.
+                } else {
+                  // At col 0. Cannot combine with off-screen/prev-line easily
+                  // in simple model. Treat as non-combining (width 1) or
+                  // separate cell? Let's just treat as separate cell for
+                  // simplification unless at wrap.
+                  handled_combine = false; // Fallthrough
+                }
+
+                // If we found a valid previous cell to combine with:
+                if (target_col < screen_cols) { // Valid
+                  if (!screen_buffer[target_row][target_col].content.empty()) {
+                    screen_buffer[target_row][target_col].content += char_str;
+                    handled_combine = true;
+                    // Cursor does NOT move.
                   }
                 }
-              } else {
-                // Overwrite mode
-                screen_buffer[screen_cursor_row][screen_cursor_col] =
-                    Cell{char_str, action.attributes};
               }
-              screen_cursor_col++;
-              if (screen_cursor_col >= screen_cols) {
-                screen_cursor_col = 0;
-                screen_cursor_row++;
+
+              if (!handled_combine) {
+                // Normal insert/overwrite
+                if (insert_mode) {
+                  if (screen_cursor_row < (int)screen_buffer.size()) {
+                    auto &row = screen_buffer[screen_cursor_row];
+                    if (screen_cursor_col < (int)row.size()) {
+                      row.insert(row.begin() + screen_cursor_col,
+                                 Cell{char_str, action.attributes});
+                      if (row.size() > (size_t)screen_cols) {
+                        row.pop_back();
+                      }
+                    } else {
+                      if (screen_cursor_col < screen_cols)
+                        screen_buffer[screen_cursor_row][screen_cursor_col] =
+                            Cell{char_str, action.attributes};
+                    }
+                  }
+                } else {
+                  if (screen_cursor_row < (int)screen_buffer.size() &&
+                      screen_cursor_col < screen_cols)
+                    screen_buffer[screen_cursor_row][screen_cursor_col] =
+                        Cell{char_str, action.attributes};
+                }
+
+                // Move cursor
+                if (screen_cursor_col + 1 >= screen_cols) {
+                  if (auto_wrap_mode) {
+                    wrap_next = true;
+                  }
+                } else {
+                  screen_cursor_col++;
+                  wrap_next = false;
+                }
               }
             }
           }
@@ -164,36 +333,26 @@ std::string Terminal::poll_output() {
             pending_utf8.erase(0, pos);
           }
         } else if (action.type == ActionType::NEWLINE) {
-          screen_cursor_row++;
+          wrap_next = false;
           int bottom = (scroll_region_bottom == -1) ? screen_rows - 1
                                                     : scroll_region_bottom;
-          int top = scroll_region_top;
-
-          // Ensure bounds
-          if (bottom >= (int)screen_buffer.size())
-            bottom = (int)screen_buffer.size() - 1;
-          if (top < 0)
-            top = 0;
-          if (top > bottom)
-            top = bottom;
-
-          if (screen_cursor_row > bottom) {
-            // Scroll up within region
-            screen_cursor_row = bottom;
-            if (top < (int)screen_buffer.size() &&
-                bottom < (int)screen_buffer.size()) {
-              screen_buffer.erase(screen_buffer.begin() + top);
-              screen_buffer.insert(
-                  screen_buffer.begin() + bottom,
-                  std::vector<Cell>(screen_cols, Cell{" ", {}}));
-            }
+          if (screen_cursor_row == bottom) {
+            perform_scroll_up();
+          } else {
+            screen_cursor_row++;
+            if (screen_cursor_row >= screen_rows)
+              screen_cursor_row = screen_rows - 1;
           }
         } else if (action.type == ActionType::CARRIAGE_RETURN) {
+          wrap_next = false;
           screen_cursor_col = 0;
         } else if (action.type == ActionType::BACKSPACE) {
-          if (screen_cursor_col > 0)
+          wrap_next = false;
+          if (screen_cursor_col > 0) {
             screen_cursor_col--;
+          }
         } else if (action.type == ActionType::MOVE_CURSOR) {
+          wrap_next = false;
           if (action.flag) { // Absolute position (1-based)
             screen_cursor_row = action.row - 1;
             screen_cursor_col = action.col - 1;
@@ -360,6 +519,64 @@ std::string Terminal::poll_output() {
               }
             }
           }
+        } else if (action.type ==
+                   ActionType::SCROLL_UP) { // This is for CSI S, not line feed
+          int bottom = (scroll_region_bottom == -1) ? screen_rows - 1
+                                                    : scroll_region_bottom;
+
+          if (screen_cursor_row == bottom) {
+            perform_scroll_up();
+          } else {
+            screen_cursor_row++;
+            if (screen_cursor_row >= screen_rows)
+              screen_cursor_row = screen_rows - 1;
+          }
+        } else if (action.type == ActionType::SET_CURSOR_VISIBLE) {
+          cursor_visible = action.flag;
+        } else if (action.type == ActionType::SAVE_CURSOR) {
+          saved_cursor_row = screen_cursor_row;
+          saved_cursor_col = screen_cursor_col;
+        } else if (action.type == ActionType::RESTORE_CURSOR) {
+          wrap_next = false;
+          screen_cursor_row = saved_cursor_row;
+          screen_cursor_col = saved_cursor_col;
+          // Clamp checks
+          if (screen_cursor_row >= screen_rows)
+            screen_cursor_row = screen_rows - 1;
+          if (screen_cursor_row < 0)
+            screen_cursor_row = 0;
+          if (screen_cursor_col >= screen_cols)
+            screen_cursor_col = screen_cols - 1;
+          if (screen_cursor_col < 0)
+            screen_cursor_col = 0;
+        } else if (action.type == ActionType::REVERSE_INDEX) {
+          int top = scroll_region_top;
+
+          if (screen_cursor_row == top) {
+            perform_scroll_down();
+          } else {
+            if (screen_cursor_row > 0)
+              screen_cursor_row--;
+          }
+        } else if (action.type == ActionType::NEXT_LINE) {
+          wrap_next = false;
+          // Move to first char of next line
+          screen_cursor_col = 0;
+          screen_cursor_row++;
+          int bottom = (scroll_region_bottom == -1) ? screen_rows - 1
+                                                    : scroll_region_bottom;
+          if (screen_cursor_row > bottom) {
+            screen_cursor_row = bottom;
+            perform_scroll_up();
+          }
+        } else if (action.type == ActionType::SCROLL_TEXT_UP) { // CSI S
+          for (int i = 0; i < action.row; ++i)
+            perform_scroll_up();
+        } else if (action.type == ActionType::SCROLL_TEXT_DOWN) { // CSI T
+          for (int i = 0; i < action.row; ++i)
+            perform_scroll_down();
+        } else if (action.type == ActionType::SET_APPLICATION_CURSOR_KEYS) {
+          application_cursor_keys = action.flag;
         }
       } else {
         // Normal mode (History)
@@ -431,7 +648,17 @@ std::string Terminal::poll_output() {
           if (!active_line.segments.empty()) {
             auto &last = active_line.segments.back();
             if (!last.content.empty()) {
-              last.content.pop_back();
+              // Remove last UTF-8 codepoint
+              while (!last.content.empty()) {
+                unsigned char c = (unsigned char)last.content.back();
+                last.content.pop_back();
+                // If it's a standalone ASCII byte (0xxxxxxx) or the start of a
+                // sequence (11xxxxxx), we are done. If it's a continuation byte
+                // (10xxxxxx), continue.
+                if ((c & 0xC0) != 0x80) {
+                  break;
+                }
+              }
               if (last.content.empty()) {
                 active_line.segments.pop_back();
               }

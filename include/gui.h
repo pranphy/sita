@@ -5,6 +5,11 @@
 #include "terminal_view.h"
 #include <GLFW/glfw3.h>
 
+#ifdef HAVE_WAYLAND
+#include "wayland_text_input.h"
+#include <memory>
+#endif
+
 class GLFWApp {
 public:
   GLFWApp();
@@ -22,6 +27,10 @@ private:
   GLFWwindow *window;
   Terminal terminal;
   TerminalView view;
+
+#ifdef HAVE_WAYLAND
+  std::unique_ptr<WaylandTextInput> wayland_input;
+#endif
 };
 
 #endif

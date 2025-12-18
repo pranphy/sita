@@ -237,8 +237,12 @@ void TerminalView::render() {
     }
   }
 
-  // Render cursor
-  if (cursor_visible) {
+  // Render preedit text if available
+  if (!terminal.get_preedit().empty()) {
+    render_preedit(cursor_pos.x, cursor_pos.y);
+  } else if (cursor_visible && terminal.cursor_visible) {
+    // Render normal cursor only if no preedit (or render it after? usually
+    // preedit replaces cursor)
     render_cursor(cursor_pos.x, cursor_pos.y);
   }
 }
@@ -327,6 +331,85 @@ void TerminalView::render_cursor(float x, float y) {
     text_renderer->draw_solid_rectangle(x, y, CELL_WIDTH, LINE_HEIGHT, color,
                                         win_width, win_height);
   }
+}
+
+void TerminalView::render_preedit(float x, float y) {
+  if (!text_renderer)
+    return;
+
+  const std::string &preedit = terminal.get_preedit();
+
+  float current_x = x;
+  float baseline_offset = LINE_HEIGHT * 0.25f;
+
+  // Preedit style: Underline, maybe distinct color?
+  float fg_color[4] = {1.0f, 1.0f, 1.0f, 1.0f}; // White text
+  float bg_color[4] = {0.2f, 0.2f, 0.2f,
+                       1.0f}; // Dark gray background for preedit area
+
+  // Render preedit text
+  for (const auto &chunk : utl::split_by_devanagari(preedit)) {
+    size_t temp_pos = 0;
+    unsigned int first_cp = utl::get_next_codepoint(chunk, temp_pos);
+
+    if (utl::is_devanagari(first_cp)) {
+      float w = text_renderer->measure_text_width(chunk, 1.0f);
+
+      // Draw background
+      text_renderer->draw_solid_rectangle(current_x, y, w, LINE_HEIGHT,
+                                          bg_color, win_width, win_height);
+
+      // Draw text
+      text_renderer->render_text_harfbuzz(
+          chunk, {current_x, y + baseline_offset}, 1.0f, fg_color, win_width,
+          win_height);
+
+      // Draw underline
+      float underline_y = y + baseline_offset - 2.0f;
+      text_renderer->draw_solid_rectangle(current_x, underline_y, w, 2.0f,
+                                          fg_color, win_width, win_height);
+
+      current_x += w;
+    } else {
+      // ASCII/Latin
+      size_t pos = 0;
+      while (pos < chunk.length()) {
+        size_t prev_pos = pos;
+        utl::get_next_codepoint(chunk, pos);
+        std::string char_str = chunk.substr(prev_pos, pos - prev_pos);
+
+        // Draw background
+        text_renderer->draw_solid_rectangle(current_x, y, CELL_WIDTH,
+                                            LINE_HEIGHT, bg_color, win_width,
+                                            win_height);
+
+        // Draw text
+        text_renderer->render_text_harfbuzz(
+            char_str, {current_x, y + baseline_offset}, 1.0f, fg_color,
+            win_width, win_height);
+
+        // Draw underline
+        float underline_y = y + baseline_offset - 2.0f;
+        text_renderer->draw_solid_rectangle(current_x, underline_y, CELL_WIDTH,
+                                            2.0f, fg_color, win_width,
+                                            win_height);
+
+        current_x += CELL_WIDTH;
+      }
+    }
+  }
+
+  // Render cursor within preedit if needed
+  // For now, we just render the preedit text. The cursor position within
+  // preedit can be visualized, but a simple underline is often enough for a
+  // start. If we want to show the cursor:
+  /*
+  if (cursor_idx >= 0 && cursor_idx <= (int)preedit.length()) {
+     // Calculate visual position of cursor_idx... this is complex with variable
+  width text
+     // For now, let's just leave it as is.
+  }
+  */
 }
 
 void TerminalView::get_color(const TerminalColor &color, float *out_color,

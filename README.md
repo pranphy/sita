@@ -4,8 +4,8 @@ SImple Terminal Application
 
 ## Description
 
-This is a terminal emulator written in C++.
-This is a GPU-accelerated terminal application that hopes to render complex scripts like Devanagari nicely.
+This is a terminal emulator written in C++. This is a GPU-accelerated terminal application that hopes to render complex scripts like Devanagari nicely.
+
 Demo
 ![](screenshot.png)
 
@@ -46,3 +46,6 @@ To build this project from source, follow these steps:
    cd build
    ninja
    ```
+
+> [! WARNING ]
+> This is very volatile and rapidly develooping application. Use with caution.
