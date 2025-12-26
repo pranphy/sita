@@ -2,6 +2,12 @@
 #include <iostream>
 #include <print>
 
+
+// --- Define static members declared in tty.h ---
+termios tty::old_termios{};   // actual storage
+bool tty::running = true;     // actual storage
+
+
 tty::tty(std::string shell_path) {
   // set_terminal_raw_mode();
   // std::atexit(restore_terminal_mode); // Ensure terminal mode is restored on

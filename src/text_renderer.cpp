@@ -124,7 +124,7 @@ void TextRenderer::load_font(const char *font_path, unsigned int font_index) {
     return;
   }
 
-  FT_Set_Pixel_Sizes(face, 0, 48); // Set font size
+  FT_Set_Pixel_Sizes(face, 0, 38); // Set font size
 
   // Initialize HarfBuzz font
   hb_font_t *hb_font = hb_ft_font_create(face, nullptr);

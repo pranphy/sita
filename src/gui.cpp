@@ -1,348 +1,289 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #ifdef HAVE_WAYLAND
-#define GLFW_EXPOSE_NATIVE_WAYLAND
 #include <GLFW/glfw3native.h>
 #endif
+
 #include <iostream>
 #include <print>
-#include <thread>
+#include <unordered_map>
+#include <string>
 
 #include "gui.h"
-// Terminal GLFWApp::terminal = Terminal(0,0);
 
-GLFWApp::GLFWApp() : terminal(1920, 1080), view(terminal) {
-  glfwInit();
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+namespace {
+
+// UTF‑8 encode a Unicode codepoint
+std::string utf8_encode(unsigned int cp) {
+    std::string out;
+    if (cp <= 0x7F) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0xFFFF) {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+    return out;
 }
 
-GLFWApp::~GLFWApp() { glfwTerminate(); }
+} // namespace
 
-int GLFWApp::create(int width, int height, const char *title) {
 
-  window = glfwCreateWindow(width, height, title, NULL, NULL);
-  if (!window) {
-    std::println(std::cerr, "ERROR::GLFW: Failed to create GLFW window");
+GLFWApp::GLFWApp()
+    : terminal(1920, 1080),
+      view(terminal)
+{
+    if (!glfwInit())
+        throw std::runtime_error("Failed to initialize GLFW");
+
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_CORE_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+}
+
+GLFWApp::~GLFWApp() {
+    if (window)
+        glfwDestroyWindow(window);
     glfwTerminate();
-    return -1;
-  }
-  glfwMakeContextCurrent(window);
-  glfwSetWindowUserPointer(window, this);
-  glfwSetKeyCallback(window, [](GLFWwindow *window, int key, int scancode,
-                                int action, int mods) {
-    auto app = static_cast<GLFWApp *>(glfwGetWindowUserPointer(window));
-    if (app) {
-      app->on_key_press(key, action, mods);
-    }
-  });
+}
 
-  glfwSetCharCallback(window, [](GLFWwindow *window, unsigned int codepoint) {
-    auto app = static_cast<GLFWApp *>(glfwGetWindowUserPointer(window));
-    if (app) {
-      app->on_char(codepoint);
-    }
-  });
 
-  glfwSetFramebufferSizeCallback(
-      window, [](GLFWwindow *window, int width, int height) {
-        // std::println("Setting callback ");
-        auto app = static_cast<GLFWApp *>(glfwGetWindowUserPointer(window));
-        if (app) {
-          std::println("Changed size to {}x{}", width, height);
-          app->on_resize(width, height);
-        } else {
-          // std::println("Failed to set callback");
+void GLFWApp::scroll_callback(GLFWwindow* w, double x, double y) {
+    if (auto* app = static_cast<GLFWApp*>(glfwGetWindowUserPointer(w)))
+        app->on_scroll(x, y);
+}
+
+void GLFWApp::key_callback(GLFWwindow* w, int key, int sc, int act, int mods) {
+    if (auto* app = static_cast<GLFWApp*>(glfwGetWindowUserPointer(w)))
+        app->on_key_press(key, act, mods);
+}
+
+void GLFWApp::char_callback(GLFWwindow* w, unsigned int cp) {
+    if (auto* app = static_cast<GLFWApp*>(glfwGetWindowUserPointer(w)))
+        app->on_char(cp);
+}
+
+void GLFWApp::resize_callback(GLFWwindow* w, int width, int height) {
+    if (auto* app = static_cast<GLFWApp*>(glfwGetWindowUserPointer(w)))
+        app->on_resize(width, height);
+}
+
+void GLFWApp::focus_callback(GLFWwindow* w, int focused) {
+#ifdef HAVE_WAYLAND
+    if (auto* app = static_cast<GLFWApp*>(glfwGetWindowUserPointer(w))) {
+        if (app->wayland_input) {
+            focused ? app->wayland_input->focus_in()
+                    : app->wayland_input->focus_out();
         }
-      });
-
-  glfwSetScrollCallback(
-      window, [](GLFWwindow *window, double xoffset, double yoffset) {
-        auto app = static_cast<GLFWApp *>(glfwGetWindowUserPointer(window));
-        if (app) {
-          app->on_scroll(xoffset, yoffset);
-        }
-      });
-
-  glfwSetWindowFocusCallback(window, [](GLFWwindow *window, int focused) {
-    auto app = static_cast<GLFWApp *>(glfwGetWindowUserPointer(window));
-    if (app && app->wayland_input) {
-      if (focused) {
-        app->wayland_input->focus_in();
-      } else {
-        app->wayland_input->focus_out();
-      }
     }
-  });
+#endif
+}
 
-  // Initialize GLEW
-  if (glewInit() != GLEW_OK) {
-    std::println(std::cerr, "ERROR::GLEW: Failed to initialize GLEW");
-    return -1;
-  }
+// ------------------------------------------------------------
+// GLFWApp: Create Window
+// ------------------------------------------------------------
 
-  // Set viewport
-  glViewport(0, 0, width, height);
+int GLFWApp::create(int width, int height, const char* title) {
+    window = glfwCreateWindow(width, height, title, nullptr, nullptr);
+    if (!window) {
+        std::println(std::cerr, "ERROR::GLFW: Failed to create window");
+        return -1;
+    }
 
-  // Set clear color
-  glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glfwMakeContextCurrent(window);
+    glfwSetWindowUserPointer(window, this);
+
+    // Register static callbacks
+    glfwSetScrollCallback(window, &GLFWApp::scroll_callback);
+    glfwSetKeyCallback(window, &GLFWApp::key_callback);
+    glfwSetCharCallback(window, &GLFWApp::char_callback);
+    glfwSetFramebufferSizeCallback(window, &GLFWApp::resize_callback);
+    glfwSetWindowFocusCallback(window, &GLFWApp::focus_callback);
+
+    if (glewInit() != GLEW_OK) {
+        std::println(std::cerr, "ERROR::GLEW: Failed to initialize GLEW");
+        return -1;
+    }
+
+    glViewport(0, 0, width, height);
+    glClearColor(0.f, 0.f, 0.f, 1.f);
 
 #ifdef HAVE_WAYLAND
-  // Initialize Wayland text input if on Wayland
-  if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) {
-    auto *wl_display = glfwGetWaylandDisplay();
-    wayland_input = std::make_unique<WaylandTextInput>(wl_display);
+    if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) {
+        auto* wl_display = glfwGetWaylandDisplay();
+        wayland_input = std::make_unique<WaylandTextInput>(wl_display);
 
-    if (wayland_input->is_valid()) {
-      std::println("Wayland text-input initialized successfully");
+        if (wayland_input->is_valid()) {
+            std::println("Wayland text-input initialized");
 
-      // Set up callbacks
-      wayland_input->set_preedit_callback(
-          [this](const std::string &text, int cursor) {
-            terminal.set_preedit(text, cursor);
-          });
+            wayland_input->set_preedit_callback(
+                [this](const std::string& text, int cursor) {
+                    terminal.set_preedit(text, cursor);
+                });
 
-      wayland_input->set_commit_callback([this](const std::string &text) {
-        terminal.send_input(text);
-        terminal.clear_preedit();
-      });
+            wayland_input->set_commit_callback(
+                [this](const std::string& text) {
+                    terminal.send_input(text);
+                    terminal.clear_preedit();
+                });
 
-      // Initial focus if window is already focused
-      if (glfwGetWindowAttrib(window, GLFW_FOCUSED)) {
-        wayland_input->focus_in();
-      }
-    } else {
-      std::println(std::cerr, "Failed to initialize Wayland text-input");
+            if (glfwGetWindowAttrib(window, GLFW_FOCUSED))
+                wayland_input->focus_in();
+        }
     }
-  }
 #endif
 
-  return 0;
+    return 0;
 }
+
+// ------------------------------------------------------------
+// GLFWApp: Main Loop
+// ------------------------------------------------------------
 
 void GLFWApp::mainloop() {
-  // Use IosevkaTerm as primary font and Laila-Regular as fallback for
-  // Devanagari
-  // TextRenderer text_renderer;
-  int width, height;
-  glfwGetFramebufferSize(window, &width, &height);
-  glViewport(0, 0, width, height);
-  glClear(GL_COLOR_BUFFER_BIT);
-  auto renderer = new TextRenderer();
-  view.set_renderer(renderer);
-  view.set_window_size(width, height);
+    int width, height;
+    glfwGetFramebufferSize(window, &width, &height);
 
-  std::println("Main looping ");
+    text_renderer = std::make_unique<TextRenderer>();
+    view.set_renderer(text_renderer.get());
+    view.set_window_size(width, height);
 
-  while (!glfwWindowShouldClose(window)) {
-    // lets just slow things downa a bit, shall we?
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    while (!glfwWindowShouldClose(window)) {
 
 #ifdef HAVE_WAYLAND
-    // Dispatch Wayland events if on Wayland
-    if (wayland_input && wayland_input->is_valid()) {
-      wl_display_dispatch_pending(glfwGetWaylandDisplay());
-    }
+        if (wayland_input && wayland_input->is_valid())
+            wl_display_dispatch_pending(glfwGetWaylandDisplay());
 #endif
 
-    auto output = terminal.poll_output();
-    if (output.find('\x04') != std::string::npos) {
-      glfwSetWindowShouldClose(window, true);
-    }
-    view.update_cursor_blink();
-    view.render();
+        if (terminal.poll_output().contains('\x04'))
+            glfwSetWindowShouldClose(window, true);
 
-    // Update input method cursor position
+        view.update_cursor_blink();
+        view.render();
+
 #ifdef HAVE_WAYLAND
-    if (wayland_input && wayland_input->is_valid()) {
-      auto cpos = view.get_cursor_pos();
-      // Convert y to be from top-left for Wayland (OpenGL is bottom-left
-      // usually, but TerminalView seems to calculate for top-left logic or uses
-      // y--) TerminalView::render uses: cursor_pos = {25.0f, win_height -
-      // LINE_HEIGHT - rows...} This is OpenGL coordinates (0,0 is bottom-left).
-      // Wayland expects surface-local coordinates (0,0 is top-left).
-      // We need to invert Y.
-      int win_w, win_h;
-      glfwGetWindowSize(window, &win_w, &win_h);
-      int y_wayland = win_h - (int)cpos.y - (int)view.get_line_height();
-      wayland_input->set_cursor_rect((int)cpos.x, y_wayland,
-                                     (int)view.get_char_width(),
-                                     (int)view.get_line_height());
-    }
+        if (wayland_input && wayland_input->is_valid()) {
+            auto cpos = view.get_cursor_pos();
+            int win_w, win_h;
+            glfwGetWindowSize(window, &win_w, &win_h);
+            int y_wayland = win_h - int(cpos.y) - int(view.get_line_height());
+            wayland_input->set_cursor_rect(
+                int(cpos.x),
+                y_wayland,
+                int(view.get_char_width()),
+                int(view.get_line_height()));
+        }
 #endif
 
-    glfwSwapBuffers(window);
-    glfwPollEvents();
-    view.render();
-    // glfwSwapBuffers(window);
-  }
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+    }
 }
 
-void GLFWApp::on_scroll(double /*xoffset*/, double yoffset) {
-  if (yoffset > 0) {
-    terminal.scroll_up();
-    terminal.scroll_up(); // Scroll faster?
-    terminal.scroll_up();
-  } else if (yoffset < 0) {
-    terminal.scroll_down();
-    terminal.scroll_down();
-    terminal.scroll_down();
-  }
-  view.render();
+// ------------------------------------------------------------
+// GLFWApp: Event Handlers
+// ------------------------------------------------------------
+
+void GLFWApp::on_scroll(double, double y) {
+    if (y > 0) {
+        terminal.scroll_up();
+        terminal.scroll_up();
+        terminal.scroll_up();
+    } else if (y < 0) {
+        terminal.scroll_down();
+        terminal.scroll_down();
+        terminal.scroll_down();
+    }
+    view.render();
 }
 
 void GLFWApp::on_resize(int width, int height) {
-  glViewport(0, 0, width, height);
-  view.set_window_size(width, height);
-  // glClear(GL_COLOR_BUFFER_BIT);
-  view.render();
-  // glfwSwapBuffers(window);
+    glViewport(0, 0, width, height);
+    view.set_window_size(width, height);
+    view.render();
 }
 
-void GLFWApp::on_char(unsigned int codepoint) {
-  std::string encoded;
-  if (codepoint <= 0x7F) {
-    encoded += (char)codepoint;
-  } else if (codepoint <= 0x7FF) {
-    encoded += (char)(0xC0 | (codepoint >> 6));
-    encoded += (char)(0x80 | (codepoint & 0x3F));
-  } else if (codepoint <= 0xFFFF) {
-    encoded += (char)(0xE0 | (codepoint >> 12));
-    encoded += (char)(0x80 | ((codepoint >> 6) & 0x3F));
-    encoded += (char)(0x80 | (codepoint & 0x3F));
-  } else if (codepoint <= 0x10FFFF) {
-    encoded += (char)(0xF0 | (codepoint >> 18));
-    encoded += (char)(0x80 | ((codepoint >> 12) & 0x3F));
-    encoded += (char)(0x80 | ((codepoint >> 6) & 0x3F));
-    encoded += (char)(0x80 | (codepoint & 0x3F));
-  }
-  terminal.send_input(encoded);
+void GLFWApp::on_char(unsigned int cp) {
+    terminal.send_input(utf8_encode(cp));
 }
 
 void GLFWApp::on_key_press(int key, int action, int mods) {
-  if (action != GLFW_PRESS && action != GLFW_REPEAT)
-    return;
+    if (action != GLFW_PRESS && action != GLFW_REPEAT)
+        return;
 
-  // Ctrl+Key handling
-  if (mods & GLFW_MOD_CONTROL) {
-    if (key >= GLFW_KEY_A && key <= GLFW_KEY_Z) {
-      char c = key - GLFW_KEY_A + 1;
-      terminal.send_input(std::string(1, c));
-      return;
+    // Ctrl+A..Z
+    if (mods & GLFW_MOD_CONTROL) {
+        if (key >= GLFW_KEY_A && key <= GLFW_KEY_Z) {
+            terminal.send_input(std::string(1, char(key - GLFW_KEY_A + 1)));
+            return;
+        }
+        if (key == GLFW_KEY_LEFT_BRACKET) {
+            terminal.send_input("\x1b");
+            return;
+        }
     }
-    if (key == GLFW_KEY_LEFT_BRACKET) {
-      terminal.send_input("\x1b");
-      return;
-    }
-  }
 
-  // Shift+Key handling (Scrolling)
-  if (mods & GLFW_MOD_SHIFT) {
-    if (key == GLFW_KEY_UP) {
-      terminal.scroll_up();
-      return;
+    // Shift scrolling
+    if (mods & GLFW_MOD_SHIFT) {
+        switch (key) {
+            case GLFW_KEY_UP:        terminal.scroll_up();        return;
+            case GLFW_KEY_DOWN:      terminal.scroll_down();      return;
+            case GLFW_KEY_PAGE_UP:   terminal.scroll_page_up();   return;
+            case GLFW_KEY_PAGE_DOWN: terminal.scroll_page_down(); return;
+        }
     }
-    if (key == GLFW_KEY_DOWN) {
-      terminal.scroll_down();
-      return;
-    }
-    if (key == GLFW_KEY_PAGE_UP) {
-      terminal.scroll_page_up();
-      return;
-    }
-    if (key == GLFW_KEY_PAGE_DOWN) {
-      terminal.scroll_page_down();
-      return;
-    }
-  }
 
-  // Special keys
-  switch (key) {
-  case GLFW_KEY_ENTER:
-    terminal.send_input("\r");
-    break;
-  case GLFW_KEY_BACKSPACE:
-    terminal.send_input("\x7f");
-    break;
-  case GLFW_KEY_TAB:
-    terminal.send_input("\t");
-    break;
-  case GLFW_KEY_ESCAPE:
-    terminal.send_input("\x1b");
-    break;
-  case GLFW_KEY_UP:
-    terminal.send_input("\x1b[A");
-    break;
-  case GLFW_KEY_DOWN:
-    terminal.send_input("\x1b[B");
-    break;
-  case GLFW_KEY_RIGHT:
-    terminal.send_input("\x1b[C");
-    break;
-  case GLFW_KEY_LEFT:
-    terminal.send_input("\x1b[D");
-    break;
-  case GLFW_KEY_HOME:
-    terminal.send_input("\x1b[H");
-    break;
-  case GLFW_KEY_END:
-    terminal.send_input("\x1b[F");
-    break;
-  case GLFW_KEY_PAGE_UP:
-    terminal.send_input("\x1b[5~");
-    break;
-  case GLFW_KEY_PAGE_DOWN:
-    terminal.send_input("\x1b[6~");
-    break;
-  case GLFW_KEY_INSERT:
-    terminal.send_input("\x1b[2~");
-    break;
-  case GLFW_KEY_DELETE:
-    terminal.send_input("\x1b[3~");
-    break;
-  case GLFW_KEY_F1:
-    terminal.send_input("\x1bOP");
-    break;
-  case GLFW_KEY_F2:
-    terminal.send_input("\x1bOQ");
-    break;
-  case GLFW_KEY_F3:
-    terminal.send_input("\x1bOR");
-    break;
-  case GLFW_KEY_F4:
-    terminal.send_input("\x1bOS");
-    break;
-  case GLFW_KEY_F5:
-    terminal.send_input("\x1b[15~");
-    break;
-  case GLFW_KEY_F6:
-    terminal.send_input("\x1b[17~");
-    break;
-  case GLFW_KEY_F7:
-    terminal.send_input("\x1b[18~");
-    break;
-  case GLFW_KEY_F8:
-    terminal.send_input("\x1b[19~");
-    break;
-  case GLFW_KEY_F9:
-    terminal.send_input("\x1b[20~");
-    break;
-  case GLFW_KEY_F10:
-    terminal.send_input("\x1b[21~");
-    break;
-  case GLFW_KEY_F11:
-    terminal.send_input("\x1b[23~");
-    break;
-  case GLFW_KEY_F12:
-    terminal.send_input("\x1b[24~");
-    break;
-  }
+    // Escape sequences
+    static const std::unordered_map<int, std::string> keymap = {
+        {GLFW_KEY_ENTER,     "\r"},
+        {GLFW_KEY_BACKSPACE, "\x7f"},
+        {GLFW_KEY_TAB,       "\t"},
+        {GLFW_KEY_ESCAPE,    "\x1b"},
+        {GLFW_KEY_UP,        "\x1b[A"},
+        {GLFW_KEY_DOWN,      "\x1b[B"},
+        {GLFW_KEY_RIGHT,     "\x1b[C"},
+        {GLFW_KEY_LEFT,      "\x1b[D"},
+        {GLFW_KEY_HOME,      "\x1b[H"},
+        {GLFW_KEY_END,       "\x1b[F"},
+        {GLFW_KEY_PAGE_UP,   "\x1b[5~"},
+        {GLFW_KEY_PAGE_DOWN, "\x1b[6~"},
+        {GLFW_KEY_INSERT,    "\x1b[2~"},
+        {GLFW_KEY_DELETE,    "\x1b[3~"},
+        {GLFW_KEY_F1,        "\x1bOP"},
+        {GLFW_KEY_F2,        "\x1bOQ"},
+        {GLFW_KEY_F3,        "\x1bOR"},
+        {GLFW_KEY_F4,        "\x1bOS"},
+        {GLFW_KEY_F5,        "\x1b[15~"},
+        {GLFW_KEY_F6,        "\x1b[17~"},
+        {GLFW_KEY_F7,        "\x1b[18~"},
+        {GLFW_KEY_F8,        "\x1b[19~"},
+        {GLFW_KEY_F9,        "\x1b[20~"},
+        {GLFW_KEY_F10,       "\x1b[21~"},
+        {GLFW_KEY_F11,       "\x1b[23~"},
+        {GLFW_KEY_F12,       "\x1b[24~"},
+    };
+
+    if (auto it = keymap.find(key); it != keymap.end())
+        terminal.send_input(it->second);
 }
+
+// ------------------------------------------------------------
+// Cleanup
+// ------------------------------------------------------------
 
 void GLFWApp::cleanup() {
-  // Cleanup
-  std::println("Done doing things ");
-  glfwDestroyWindow(window);
-  glfwTerminate();
+    std::println("Cleanup");
+    if (window) {
+        glfwDestroyWindow(window);
+        window = nullptr;
+    }
 }
+

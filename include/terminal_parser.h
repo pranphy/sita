@@ -59,7 +59,7 @@ enum class AnsiColor {
   RESET
 };
 
-struct TerminalColor {
+struct TerminalColorE {
   enum class Type { DEFAULT, ANSI, INDEXED, RGB } type = Type::DEFAULT;
   AnsiColor ansi_color = AnsiColor::WHITE;
   uint8_t indexed_color = 0;
@@ -67,6 +67,28 @@ struct TerminalColor {
   uint8_t g = 0;
   uint8_t b = 0;
 };
+
+struct TerminalColor {
+    enum class Type { DEFAULT, ANSI, INDEXED, RGB } type = Type::DEFAULT;
+
+    AnsiColor ansi_color = AnsiColor::WHITE;
+    int indexed_color = 0;
+    uint8_t r = 255, g = 255, b = 255;
+
+    bool operator==(const TerminalColor& other) const {
+        return type == other.type &&
+               ansi_color == other.ansi_color &&
+               indexed_color == other.indexed_color &&
+               r == other.r &&
+               g == other.g &&
+               b == other.b;
+    }
+
+    bool operator!=(const TerminalColor& other) const {
+        return !(*this == other);
+    }
+};
+
 
 struct TerminalAttributes {
   TerminalColor foreground; // Default initialized to Type::DEFAULT
